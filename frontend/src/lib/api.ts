@@ -1,3 +1,5 @@
+import type { AnimationDSL } from './animator'
+
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 type JsonValue =
@@ -81,6 +83,11 @@ export interface InpaintResponse {
   background_url: string
 }
 
+export interface AnimationPlanResponse {
+  image_id: string
+  plan: AnimationDSL
+}
+
 export const perceiveElements = (imageId: string): Promise<PerceptionResponse> =>
   api.postJson<PerceptionResponse>('/api/perception', { image_id: imageId })
 
@@ -100,6 +107,17 @@ export const inpaintBackground = (
   api.postJson<InpaintResponse>('/api/inpaint', {
     image_id: imageId,
     masks: masks as unknown as JsonValue,
+  })
+
+export const planAnimation = (
+  imageId: string,
+  elements: Element[],
+  prompt: string,
+): Promise<AnimationPlanResponse> =>
+  api.postJson<AnimationPlanResponse>('/api/plan-animation', {
+    image_id: imageId,
+    elements: elements as unknown as JsonValue,
+    prompt,
   })
 
 export const uploadImage = (

@@ -33,6 +33,9 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Frontend unit tests use Vitest (`npm run test`). Config lives in `frontend/vitest.config.ts`; include pattern is `src/**/*.{test,spec}.ts`. Default environment is `node` (happy-dom is installed for future Vue component tests).
 - GSAP's global types expose `GSAPTween`, `GSAPTimeline`, etc. as top-level aliases — use those in tests instead of `import type gsap from 'gsap'`, because `erasableSyntaxOnly`/`noUnusedLocals` reports type-only imports as unused.
 - GSAP timelines accept any object as a tween target (not just DOM nodes), so animator unit tests can pass `{}` as the layer ref and assert `tween.vars.x`, `timeline.duration()`, `subTimeline.repeat()` without a DOM.
+- Child components that wrap animated DOM (e.g. `LayeredCanvas`) expose layer handles via `defineExpose({ getLayerRefs })` — callers access them with `ref<InstanceType<typeof LayeredCanvas> | null>` + `canvasRef.value?.getLayerRefs()`. Keeps the DOM `<img>`s encapsulated while letting views feed them to `buildTimeline`.
+- When rebuilding a GSAP timeline (user re-runs plan), dispose the previous one with `timeline.kill()` AND reset inline `style.transform` / `style.opacity` on each layer before building the new one — otherwise GSAP's residual transforms bleed into the next animation's initial state.
+- `import type { AnimationDSL } from './animator'` inside `api.ts` keeps backend response typing in sync with the animator's DSL without duplicating interfaces (single source of truth). Avoid circular imports by keeping animator.ts free of api.ts imports.
 
 ---
 
@@ -260,4 +263,25 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - Backend DSL uses `angle` for rotate but GSAP's tween prop is `rotation` (not `angle`) — keep that translation centralized in the animator.
   - `gsap.timeline()` accepts plain objects as targets (it mutates properties), so Vitest can run in `node` environment without jsdom/happy-dom when only exercising the timeline builder.
   - Use `timeline.getChildren(true, true, false)` to flatten all nested tweens across sub-timelines; `getChildren(false, false, true)` returns only top-level sub-timelines.
+---
+
+## 2026-04-17 - US-011b
+- Added right-panel animation controls to `frontend/src/views/Editor.vue`: textarea + "Make it Lively" button, plan/planning/error states, and a 3-button Play/Pause/Reset control row whose disabled state follows `hasTimeline` + `isPlaying`.
+- On click, `onMakeLively` calls `planAnimation(...)` and, on success, kills any previous GSAP timeline, resets inline transforms on the layer `<img>`s, builds a fresh paused timeline via `buildTimeline`, then auto-plays it. The `onComplete` callback flips `isPlaying=false` so Play/Pause states stay accurate after non-loop plans finish.
+- Planner failures surface through a `planError` alert under the button; existing canvas state (elements, layers, background) is never touched on the error path, so retrying with a new prompt works without repeating the perception/segment/inpaint pipeline.
+- Extended `LayeredCanvas.vue` with `defineExpose({ getLayerRefs })` — it now tracks each rendered `<img>` in a `layerEls` map via template ref callbacks, and the editor grabs the map through `canvasRef.value?.getLayerRefs()`.
+- Added `planAnimation` API wrapper + `AnimationPlanResponse` type in `frontend/src/lib/api.ts`, re-using `AnimationDSL` from `frontend/src/lib/animator.ts` as the source of truth.
+- Changed editor layout from `grid-cols-[280px_1fr]` to `grid-cols-[280px_1fr_320px]` to accommodate the new right panel.
+- Quality gates: `npm run build` (vue-tsc -b + vite build) green; `npm run test` passes 12/12 animator tests.
+- Browser verification: no MCP browser / `dev-browser` skill available in this environment. Manual check recommended — start backend + frontend, upload an image, type "the bird flies across the sky and loops", click Make it Lively, confirm animation starts; verify Pause disables itself when paused, Play disables itself when playing, Reset returns layers to t=0. Trigger an API failure (kill backend after pipeline done) to confirm the error alert appears and the static canvas is unchanged.
+- Files changed:
+  - frontend/src/views/Editor.vue (right panel + playback + timeline lifecycle)
+  - frontend/src/components/LayeredCanvas.vue (expose layer refs)
+  - frontend/src/lib/api.ts (planAnimation wrapper + AnimationPlanResponse)
+- **Learnings for future iterations:**
+  - Vue template ref callbacks get `Element | ComponentPublicInstance | null` but the local `Element` type in `api.ts` shadows the DOM `Element` — type the callback arg as `unknown` and narrow with `instanceof HTMLImageElement` to avoid the naming clash without renaming the imported type.
+  - For playback "Play disabled when playing / Pause disabled when paused / Reset always enabled when timeline exists": track a single `isPlaying` ref and flip it in `onPlay/onPause/onReset` + the timeline's `onComplete` callback. Don't poll `timeline.paused()` — GSAP updates that lazily and the UI lags one tick.
+  - `timeline.pause(0)` is the one-liner for Reset: pauses playback AND seeks to the start, so subsequent Play replays from t=0 without needing `restart()` + pause gymnastics.
+  - Filter the planner's DSL down to elements that actually have registered refs before calling `buildTimeline` — otherwise one missing layer throws `MissingElementError` and kills the whole animation. Raising a friendlier error when the filtered list is empty beats a raw GSAP trace.
+  - Callback signatures on `timeline.eventCallback('onComplete', cb)` expect `(this: gsap.core.Timeline) => void` — keep the handler an arrow that only touches refs (no `this` access) to stay mypy… er, tsc-clean.
 ---

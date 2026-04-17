@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
 import {
   API_BASE_URL,
   ApiError,
@@ -7,8 +7,10 @@ import {
   inpaintBackground,
   type Layer,
   perceiveElements,
+  planAnimation,
   segmentElements,
 } from '../lib/api'
+import { buildTimeline, type AnimationDSL } from '../lib/animator'
 import LayeredCanvas from '../components/LayeredCanvas.vue'
 
 const props = defineProps<{ imageId: string }>()
@@ -34,6 +36,15 @@ const backgroundUrl = ref<string | null>(null)
 const selectedId = ref<string | null>(null)
 const canvasDims = ref<{ width: number; height: number } | null>(null)
 
+const canvasRef = ref<InstanceType<typeof LayeredCanvas> | null>(null)
+
+const animationPrompt = ref('')
+const isPlanning = ref(false)
+const planError = ref<string | null>(null)
+const hasTimeline = ref(false)
+const isPlaying = ref(false)
+let currentTimeline: gsap.core.Timeline | null = null
+
 const layerByElement = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const layer of layers.value) {
@@ -46,7 +57,6 @@ const viewBox = computed<string>(() => {
   if (canvasDims.value) {
     return `0 0 ${canvasDims.value.width} ${canvasDims.value.height}`
   }
-  // Fallback: derive from bbox extents so outlines still show pre-inpaint.
   let maxX = 1
   let maxY = 1
   for (const el of elements.value) {
@@ -56,6 +66,14 @@ const viewBox = computed<string>(() => {
   }
   return `0 0 ${maxX} ${maxY}`
 })
+
+const pipelineReady = computed(
+  () => steps.value.every((s) => s.status === 'success') && elements.value.length > 0,
+)
+
+const canMakeLively = computed(
+  () => pipelineReady.value && animationPrompt.value.trim().length > 0 && !isPlanning.value,
+)
 
 function formatError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -110,7 +128,6 @@ async function runSegment(): Promise<boolean> {
     const response = await segmentElements(props.imageId, elements.value)
     layers.value = response.layers
     step.status = 'success'
-    // Preload the first layer to resolve intrinsic dimensions for the canvas.
     if (response.layers.length > 0) {
       void preloadDims(`${API_BASE_URL}${response.layers[0].url}`)
     }
@@ -174,8 +191,84 @@ function onSelect(id: string): void {
   selectedId.value = selectedId.value === id ? null : id
 }
 
+function disposeTimeline(): void {
+  if (currentTimeline) {
+    currentTimeline.kill()
+    currentTimeline = null
+  }
+  hasTimeline.value = false
+  isPlaying.value = false
+}
+
+function resetLayerTransforms(): void {
+  const refs = canvasRef.value?.getLayerRefs() ?? {}
+  for (const key of Object.keys(refs)) {
+    const el = refs[key]
+    if (el) {
+      el.style.transform = ''
+      el.style.opacity = ''
+    }
+  }
+}
+
+async function onMakeLively(): Promise<void> {
+  if (!canMakeLively.value) return
+  isPlanning.value = true
+  planError.value = null
+  try {
+    const response = await planAnimation(
+      props.imageId,
+      elements.value,
+      animationPrompt.value.trim(),
+    )
+    const refs = canvasRef.value?.getLayerRefs() ?? {}
+    const dsl: AnimationDSL = response.plan
+    // Only include animations for elements that have rendered layer refs.
+    const usable = dsl.filter((ea) => refs[ea.element_id] != null)
+    if (usable.length === 0) {
+      throw new Error('No matching layers available to animate')
+    }
+    disposeTimeline()
+    resetLayerTransforms()
+    const timeline = buildTimeline(usable, refs, { paused: true })
+    timeline.eventCallback('onComplete', () => {
+      isPlaying.value = false
+    })
+    currentTimeline = timeline
+    hasTimeline.value = true
+    timeline.play()
+    isPlaying.value = true
+  } catch (err) {
+    planError.value = formatError(err)
+  } finally {
+    isPlanning.value = false
+  }
+}
+
+function onPlay(): void {
+  if (!currentTimeline) return
+  currentTimeline.play()
+  isPlaying.value = true
+}
+
+function onPause(): void {
+  if (!currentTimeline) return
+  currentTimeline.pause()
+  isPlaying.value = false
+}
+
+function onReset(): void {
+  if (!currentTimeline) return
+  currentTimeline.pause(0)
+  isPlaying.value = false
+}
+
 onMounted(() => {
   void runPipelineFrom('perception')
+})
+
+onBeforeUnmount(() => {
+  disposeTimeline()
 })
 </script>
 
@@ -186,7 +279,7 @@ onMounted(() => {
       <p class="text-xs text-slate-500 font-mono">{{ props.imageId }}</p>
     </header>
 
-    <div class="grid grid-cols-[280px_1fr] gap-0 min-h-[calc(100vh-65px)]">
+    <div class="grid grid-cols-[280px_1fr_320px] gap-0 min-h-[calc(100vh-65px)]">
       <aside
         class="border-r border-slate-800 p-4 overflow-y-auto"
         data-testid="element-panel"
@@ -283,6 +376,7 @@ onMounted(() => {
         />
         <LayeredCanvas
           v-else
+          ref="canvasRef"
           :width="canvasDims?.width ?? null"
           :height="canvasDims?.height ?? null"
           :background-url="backgroundUrl"
@@ -311,6 +405,84 @@ onMounted(() => {
           </svg>
         </LayeredCanvas>
       </section>
+
+      <aside
+        class="border-l border-slate-800 p-4 overflow-y-auto flex flex-col gap-4"
+        data-testid="animation-panel"
+      >
+        <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">
+          Animate
+        </h2>
+        <label
+          class="flex flex-col gap-2 text-sm"
+          for="animation-prompt"
+        >
+          <span class="text-slate-300">Describe what should happen</span>
+          <textarea
+            id="animation-prompt"
+            v-model="animationPrompt"
+            rows="5"
+            :disabled="!pipelineReady || isPlanning"
+            placeholder="e.g. The bird flaps its wings while drifting across the sky."
+            class="rounded-lg bg-slate-900/60 border border-slate-800 focus:border-indigo-400 focus:outline-none p-3 resize-none text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            data-testid="animation-prompt"
+          />
+        </label>
+
+        <button
+          type="button"
+          class="rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-medium py-2 px-4 transition-colors disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed"
+          :disabled="!canMakeLively"
+          data-testid="make-lively"
+          @click="onMakeLively"
+        >
+          {{ isPlanning ? 'Planning…' : 'Make it Lively' }}
+        </button>
+
+        <p
+          v-if="planError"
+          class="text-xs text-red-200 bg-red-500/10 border border-red-500/40 rounded-md p-2"
+          role="alert"
+          data-testid="animation-error"
+        >
+          {{ planError }}
+        </p>
+
+        <div class="border-t border-slate-800 pt-4">
+          <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
+            Playback
+          </h3>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              class="rounded-md border border-slate-700 bg-slate-900/60 hover:bg-slate-800 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!hasTimeline || isPlaying"
+              data-testid="playback-play"
+              @click="onPlay"
+            >
+              Play
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-slate-700 bg-slate-900/60 hover:bg-slate-800 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!hasTimeline || !isPlaying"
+              data-testid="playback-pause"
+              @click="onPause"
+            >
+              Pause
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-slate-700 bg-slate-900/60 hover:bg-slate-800 py-2 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!hasTimeline"
+              data-testid="playback-reset"
+              @click="onReset"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      </aside>
     </div>
   </main>
 </template>

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { Element } from '../lib/api'
+import { computed, ref } from 'vue'
+import type { Element as ApiElement } from '../lib/api'
 
 const props = defineProps<{
   width: number | null
   height: number | null
   backgroundUrl: string | null
-  elements: Element[]
+  elements: ApiElement[]
   layerUrls: Record<string, string>
 }>()
 
@@ -15,9 +15,23 @@ const aspectStyle = computed(() => {
   return { aspectRatio: `${props.width} / ${props.height}` }
 })
 
-const orderedElements = computed<Element[]>(() =>
+const orderedElements = computed<ApiElement[]>(() =>
   [...props.elements].sort((a, b) => a.z_order - b.z_order),
 )
+
+const layerEls = ref<Record<string, HTMLImageElement>>({})
+
+function setLayerRef(id: string) {
+  return (el: unknown): void => {
+    if (el instanceof HTMLImageElement) {
+      layerEls.value[id] = el
+    }
+  }
+}
+
+defineExpose({
+  getLayerRefs: (): Record<string, HTMLImageElement> => ({ ...layerEls.value }),
+})
 </script>
 
 <template>
@@ -38,6 +52,7 @@ const orderedElements = computed<Element[]>(() =>
       v-for="el in orderedElements"
       v-show="layerUrls[el.id]"
       :key="el.id"
+      :ref="setLayerRef(el.id)"
       :src="layerUrls[el.id]"
       :alt="el.label"
       class="absolute inset-0 w-full h-full object-contain select-none pointer-events-none"
