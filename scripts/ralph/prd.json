@@ -1,0 +1,238 @@
+{
+  "project": "Make It Lively",
+  "branchName": "ralph/make-it-lively-mvp",
+  "description": "Agent app: upload an image, extract semantic elements as layers, and animate them from natural-language prompts. M1 MVP: Vite+Vue3 frontend, FastAPI backend, Claude VLM + Replicate SAM2 + GSAP.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Scaffold FastAPI backend with health check",
+      "description": "As a developer, I need a FastAPI backend skeleton with health check so subsequent endpoints can be added.",
+      "acceptanceCriteria": [
+        "backend/ contains FastAPI app and pyproject.toml (uv or poetry)",
+        "/health returns {\"status\": \"ok\"}",
+        "uvicorn app.main:app --reload starts successfully",
+        "CORS middleware configured to allow http://localhost:5173",
+        "backend/README.md documents how to run",
+        "Typecheck (ruff + mypy) passes",
+        "Tests pass"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Image upload endpoint",
+      "description": "As a user, I want to upload an image so the system can process it.",
+      "acceptanceCriteria": [
+        "POST /api/upload accepts multipart/form-data with field 'file'",
+        "Accepts PNG/JPG/WebP up to 10MB; other formats return 400",
+        "Stores image to backend/storage/images/{uuid}.{ext}",
+        "Returns {\"image_id\": uuid, \"width\": int, \"height\": int}",
+        "pytest cases cover success, oversized, and invalid format",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "VLM element perception endpoint",
+      "description": "As the system, I need to call Claude VLM to identify semantic elements in the uploaded image.",
+      "acceptanceCriteria": [
+        "POST /api/perception accepts {\"image_id\": \"...\"}",
+        "Uses Anthropic SDK with model claude-opus-4-7 or claude-sonnet-4-6",
+        "Uses tool_use to force structured JSON: [{id, label, bbox: [x,y,w,h], z_order}]",
+        "Caches result to backend/storage/perception/{image_id}.json; repeat calls read cache",
+        "Reads ANTHROPIC_API_KEY from environment",
+        "Tests pass with mocked Anthropic responses",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "SAM2 segmentation endpoint",
+      "description": "As the system, I need to segment each identified element into a transparent PNG layer using Replicate SAM2.",
+      "acceptanceCriteria": [
+        "POST /api/segment accepts {\"image_id\": \"...\", \"elements\": [...]}",
+        "Calls Replicate SAM2 (meta/sam-2) for each element bbox to generate mask",
+        "Applies mask to cut transparent PNG; saves to backend/storage/layers/{image_id}/{element_id}.png",
+        "Returns layer URL per element",
+        "Reads REPLICATE_API_TOKEN from environment",
+        "Tests pass with mocked Replicate client",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Background inpainting endpoint",
+      "description": "As the system, I need to inpaint the holes left after extracting elements so the background layer is complete.",
+      "acceptanceCriteria": [
+        "POST /api/inpaint accepts {\"image_id\": \"...\", \"masks\": [...]}",
+        "Uses Replicate inpainting model to fill the combined mask region",
+        "Saves result to backend/storage/layers/{image_id}/background.png",
+        "Returns background URL",
+        "Tests pass with mocked Replicate client",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Animation DSL planner endpoint",
+      "description": "As a user, I want my natural-language description to be converted into a per-element animation plan.",
+      "acceptanceCriteria": [
+        "POST /api/plan-animation accepts {\"image_id\": \"...\", \"elements\": [...], \"prompt\": \"...\"}",
+        "Calls Claude with element list; returns GSAP-compatible DSL [{element_id, timeline, easing, loop, duration_ms}]",
+        "DSL schema defined in backend/app/schemas/animation.py using Pydantic",
+        "Supports 5 primitives: translate, rotate, scale, opacity, path-follow",
+        "Validates that every element_id exists in the input elements list",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Scaffold Vite + Vue3 frontend",
+      "description": "As a developer, I need a Vite + Vue3 frontend skeleton with routing and basic layout.",
+      "acceptanceCriteria": [
+        "frontend/ uses Vite + Vue3 + TypeScript + Tailwind",
+        "Vue Router configured with / (home) and /editor/:imageId",
+        "API client wrapper with base URL http://localhost:8000",
+        "npm run dev starts on port 5173",
+        "Typecheck (vue-tsc) passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Image upload page",
+      "description": "As a user, I want a drag-and-drop upload page so I can start processing my image.",
+      "acceptanceCriteria": [
+        "Home page has drag-and-drop upload area with size/format hint",
+        "On upload, calls /api/upload then navigates to /editor/:imageId on success",
+        "Shows upload progress",
+        "Shows error messages for format/size/network failures",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Element list panel and pipeline orchestration",
+      "description": "As a user, I want to see what elements the AI identified so I can trust or correct them.",
+      "acceptanceCriteria": [
+        "Editor left panel lists all elements with label + thumbnail",
+        "On page load, sequentially triggers /api/perception -> /api/segment -> /api/inpaint so background.png exists for US-010",
+        "Shows skeleton loading with per-step progress indicator",
+        "Clicking an element highlights its outline on the canvas",
+        "Each of the three API failures handled separately with retry",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Layered canvas renderer",
+      "description": "As a user, I want the image redrawn as stacked layers so each element can be animated independently.",
+      "acceptanceCriteria": [
+        "Editor center shows a canvas matching original image dimensions",
+        "Background layer and each element layer stacked by z_order",
+        "Visually matches original image (no boundary artifacts)",
+        "Component encapsulated in frontend/src/components/LayeredCanvas.vue",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011a",
+      "title": "DSL-to-GSAP animator library",
+      "description": "As a developer, I need a tested animator library that turns DSL into GSAP timelines, so the UI story can focus on wiring.",
+      "acceptanceCriteria": [
+        "GSAP installed as a dependency",
+        "frontend/src/lib/animator.ts exports buildTimeline(dsl, layerRefs) returning a gsap.core.Timeline",
+        "Implements 5 primitives: translate, rotate, scale, opacity, path-follow",
+        "Each primitive supports easing and loop fields",
+        "Vitest unit tests for each primitive assert duration, target values, and repeat on the generated timeline",
+        "Throws identifiable errors for unknown primitives or missing element_ids",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011b",
+      "title": "Animation prompt UI and playback controls",
+      "description": "As a user, I want to type what I want the elements to do and see them animate.",
+      "acceptanceCriteria": [
+        "Right panel has a textarea and 'Make it Lively' button",
+        "Clicking button calls /api/plan-animation and applies the DSL via US-011a's buildTimeline on LayeredCanvas",
+        "Play, pause, and reset buttons work with correct disabled state per playback state",
+        "API failure shows an error and does not corrupt existing canvas state",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "GIF export",
+      "description": "As a user, I want to export the animation as a GIF so I can share it.",
+      "acceptanceCriteria": [
+        "'Export GIF' button in the editor",
+        "Uses gif.js or gifenc to record canvas frames (>=2s, 15fps)",
+        "Automatically downloads make-it-lively.gif",
+        "Shows progress during recording",
+        "Typecheck passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Backend pipeline integration test",
+      "description": "As a developer, I want a pytest that runs the full backend pipeline with mocked external calls, plus a manual e2e checklist for live runs.",
+      "acceptanceCriteria": [
+        "tests/e2e/smoke.md documents manual verification steps with a fixed reference image and prompt (used with real API keys)",
+        "Backend has fixtures or snapshots for perception/segment/plan-animation on the reference image",
+        "A pytest case runs upload -> perception -> segment -> inpaint -> plan-animation with mocked or VCR-recorded external calls",
+        "Tests pass",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
