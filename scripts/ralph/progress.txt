@@ -19,6 +19,10 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - For Replicate-backed endpoints, follow the same factory pattern: `get_replicate_client()` returns `ReplicateClient()` (imported from `replicate.client`, NOT `replicate.Client` — the top-level re-export is flagged by mypy strict `attr-defined`).
 - Derived layer assets are served via a `StaticFiles` mount in `app/main.py` (e.g. `/storage/layers`). Ensure the target directory exists (`mkdir(parents=True, exist_ok=True)`) before calling `app.mount`, otherwise Starlette raises at import time.
 - Replicate's `Client.run(...)` return shape is `Any` in practice (bytes, URL str, file-like with `.read()`, or a 1-element list). Keep a small `_coerce_*` helper per endpoint to normalize before doing work.
+- Frontend lives in `frontend/` (Vite 8 + Vue 3 + TS + Tailwind v4 via `@tailwindcss/vite`). Run commands from `frontend/`: `npm install`, `npm run dev` (port 5173, strictPort), `npm run build` (vue-tsc typecheck + vite build).
+- `tsconfig.app.json` sets `erasableSyntaxOnly: true` — this rejects TypeScript parameter properties (`constructor(public foo: T)`) and enums. Declare fields explicitly and assign in the constructor body instead.
+- API base URL lives in `frontend/src/lib/api.ts` (`API_BASE_URL`, defaulting to `http://localhost:8000`, overridable via `VITE_API_BASE_URL`). All HTTP calls should go through the `api` helpers or typed wrappers in that file.
+- Routes are registered in `frontend/src/router/index.ts`; add views to `frontend/src/views/` and export the router via `export const router`. `App.vue` renders `<RouterView />` only.
 
 ---
 
@@ -142,4 +146,35 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - For LLM-structured responses, wrap `model_validate` in a try/except `ValidationError` and surface the `.errors()` as a 502 so debugging is easier than a generic "bad gateway".
   - JSON-schema `enum` for primitive types must be a plain `list[str]`; casting `PRIMITIVE_TYPES` (a tuple of `Literal`) to `list(...)` keeps one source of truth between Pydantic and the tool schema.
   - Put the user prompt inside a separate `{"type":"text"}` block after the system-style instruction block — keeps the instruction stable for cache-friendliness later without mixing it with user content.
+---
+
+## 2026-04-17 - US-007
+- Scaffolded `frontend/` with Vite 8 + Vue 3 + TypeScript via `npm create vite@latest frontend -- --template vue-ts`.
+- Installed `vue-router@4`; installed `tailwindcss` + `@tailwindcss/vite` (Tailwind v4 CSS-first config: `@import "tailwindcss";` in `src/style.css`, plugin in `vite.config.ts`).
+- Added Vue Router with `/` (Home) and `/editor/:imageId` (Editor, `props: true` to receive `imageId`). `App.vue` renders `<RouterView />`.
+- Added `src/lib/api.ts` with `API_BASE_URL` (default `http://localhost:8000`, overridable via `VITE_API_BASE_URL`), an `ApiError` class, and typed helpers (`api.get/postJson/postForm`, `uploadImage`).
+- `vite.config.ts` pins `server.port = 5173` with `strictPort: true` so the port matches the backend CORS allowlist.
+- Removed Vite starter boilerplate (`src/components/HelloWorld.vue`, `src/assets/`, default `style.css`) and set `index.html` title.
+- Wrote `frontend/README.md` with run instructions.
+- Quality gates: `npm run build` succeeds (vue-tsc -b followed by vite build, 85.77kB JS); `npm run dev` serves on http://localhost:5173 (verified via curl 200).
+- Browser verification: no MCP browser tool is available in this environment; manual verification recommended by running `npm run dev` and visiting `/` and `/editor/abc`.
+- Files changed:
+  - frontend/ (new scaffold)
+  - frontend/package.json, frontend/package-lock.json
+  - frontend/vite.config.ts (tailwind plugin + server.port)
+  - frontend/index.html (title)
+  - frontend/src/main.ts (register router)
+  - frontend/src/App.vue (RouterView)
+  - frontend/src/style.css (tailwind import)
+  - frontend/src/router/index.ts (new)
+  - frontend/src/views/Home.vue, frontend/src/views/Editor.vue (new)
+  - frontend/src/lib/api.ts (new)
+  - frontend/README.md (new)
+- **Learnings for future iterations:**
+  - Vite 8's default `tsconfig.app.json` enables `erasableSyntaxOnly`, which rejects TS parameter-properties and enums. Use class fields + explicit assignment (`this.x = x`) instead of `constructor(public x: T)`.
+  - Tailwind v4 setup is CSS-first: install `tailwindcss` + `@tailwindcss/vite`, add the plugin to `vite.config.ts`, and put `@import "tailwindcss";` at the top of the entry CSS. No `tailwind.config.js` or `postcss.config.js` required for a default install.
+  - `create-vite` 9 non-interactive scaffolding: `npm create vite@latest <dir> -- --template vue-ts --yes` (note the `--` to pass flags through npm).
+  - `strictPort: true` in `vite.config.ts` is important because the backend's CORS allowlist is pinned to `http://localhost:5173`; without it, Vite silently falls back to 5174 if 5173 is busy and API calls fail with opaque CORS errors.
+  - `vue-tsc -b` is cacheable; if a typecheck run appears to produce no output, `--force` (or deleting `node_modules/.tmp/*.tsbuildinfo`) confirms whether it actually ran.
+  - For SPA routes that take a param (`/editor/:imageId`), set `props: true` on the route record so the component can `defineProps<{ imageId: string }>()` instead of reaching into `useRoute()`.
 ---
