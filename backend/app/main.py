@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import storage
-from app.routers import inpaint, perception, segment, upload
+from app.routers import inpaint, perception, plan_animation, segment, upload
 
 app = FastAPI(title="Make It Lively", version="0.1.0")
 
@@ -22,6 +22,7 @@ app.include_router(upload.router)
 app.include_router(perception.router)
 app.include_router(segment.router)
 app.include_router(inpaint.router)
+app.include_router(plan_animation.router)
 
 storage.LAYERS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount(

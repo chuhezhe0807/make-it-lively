@@ -11,6 +11,7 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Tests use `fastapi.testclient.TestClient`; place them in `backend/tests/` with `__init__.py`.
 - HTTP endpoints live under `backend/app/routers/<name>.py` and are attached to `app` in `main.py` via `app.include_router(...)`. Use `APIRouter(prefix="/api", tags=[...])` for all feature endpoints.
 - Use `Annotated[UploadFile, File(...)]` style for FastAPI dependencies — avoids ruff B008 while staying mypy-clean.
+- Shared Pydantic schemas shared across routers live in `backend/app/schemas/` (e.g. `app/schemas/animation.py`). Router-local request models stay in the router file.
 - Filesystem paths for derived assets live in `backend/app/storage.py` (`IMAGES_DIR`, etc.). Import the module (not the constant) so tests can `monkeypatch.setattr(storage, "IMAGES_DIR", tmp_path)`.
 - `backend/storage/` is gitignored; create subdirs with `mkdir(parents=True, exist_ok=True)` on first write.
 - Anthropic SDK calls need `cast(ToolParam, ...)` / `cast(ToolChoiceToolParam, ...)` / `list[MessageParam]` typing because the Messages.create overloads reject free-form dicts under strict mypy.
@@ -120,4 +121,25 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - When the model may return a different canvas size than the original, resize back with `Image.Resampling.LANCZOS` before writing — keeps the background layer pixel-aligned with the element layers from US-004.
   - For endpoints that share the Replicate output-coercion logic, keep the helper local to each router (`_coerce_image_bytes` vs `_coerce_mask_bytes`) — they differ in the final conversion (raw bytes vs alpha application), and premature extraction would complicate strict-mypy unions.
   - `if not request.masks:` short-circuit is cheap insurance against a downstream pipeline that may call /api/inpaint even when /api/perception returned zero elements — keeps the contract "background.png always exists after this call".
+---
+
+## 2026-04-17 - US-006
+- Added `POST /api/plan-animation` that accepts `{image_id, elements, prompt}` and calls Claude (`claude-opus-4-7`) with a forced `report_animation_plan` tool_use. Returns `{image_id, plan:[{element_id, timeline, easing, loop, duration_ms}]}`.
+- Defined the shared DSL in `backend/app/schemas/animation.py`: `AnimationPrimitive` supports 5 primitives (translate/rotate/scale/opacity/path-follow), `ElementAnimation` groups a timeline with timeline-level easing/loop/duration_ms, `AnimationPlan` wraps the list.
+- Validates that every `element_id` returned by the planner exists in the request's element list — unknown ids raise 502; invalid primitives (e.g. `teleport`) also 502 via Pydantic `ValidationError`.
+- Reused the perception pattern: `get_anthropic_client()` factory, `_extract_tool_input` extracts the forced tool_use block.
+- Tests cover: success (asserts DSL shape + prompt/element text reaches LLM), unknown element_id rejection, unstructured response rejection, invalid primitive rejection, and request validation (empty elements → 422).
+- Files changed:
+  - backend/app/main.py (include plan_animation router)
+  - backend/app/routers/plan_animation.py (new)
+  - backend/app/schemas/__init__.py (new)
+  - backend/app/schemas/animation.py (new)
+  - backend/tests/test_plan_animation.py (new)
+  - backend/README.md (document endpoint)
+- **Learnings for future iterations:**
+  - With Pydantic v2, `ConfigDict(extra="forbid")` is the cleanest way to reject extraneous LLM-emitted fields without writing a custom validator.
+  - `min_length` on a Pydantic list field produces a 422 when empty — rely on it for request validation rather than a hand-rolled check.
+  - For LLM-structured responses, wrap `model_validate` in a try/except `ValidationError` and surface the `.errors()` as a 502 so debugging is easier than a generic "bad gateway".
+  - JSON-schema `enum` for primitive types must be a plain `list[str]`; casting `PRIMITIVE_TYPES` (a tuple of `Literal`) to `list(...)` keeps one source of truth between Pydantic and the tool schema.
+  - Put the user prompt inside a separate `{"type":"text"}` block after the system-style instruction block — keeps the instruction stable for cache-friendliness later without mixing it with user content.
 ---

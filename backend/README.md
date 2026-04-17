@@ -85,6 +85,20 @@ The filled background is written to
 `backend/storage/layers/{image_id}/background.png`. Empty `masks` short-circuits
 the Replicate call and copies the original image through.
 
+Animation planning (requires `ANTHROPIC_API_KEY`):
+
+```bash
+curl -X POST http://localhost:8000/api/plan-animation \
+  -H "Content-Type: application/json" \
+  -d '{"image_id":"…","elements":[{"id":"cat","label":"Orange cat","bbox":[10,20,30,40],"z_order":2}],"prompt":"make the cat bounce"}'
+# {"image_id":"…","plan":[{"element_id":"cat","timeline":[…],"easing":"power1.inOut","loop":true,"duration_ms":1200}]}
+```
+
+The planner returns a GSAP-compatible DSL with five primitives (`translate`,
+`rotate`, `scale`, `opacity`, `path-follow`). The schema lives in
+`backend/app/schemas/animation.py`. Responses that reference unknown
+`element_id`s are rejected as 502.
+
 ## Quality checks
 
 ```bash
