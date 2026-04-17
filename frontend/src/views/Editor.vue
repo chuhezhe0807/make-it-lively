@@ -9,6 +9,7 @@ import {
   perceiveElements,
   segmentElements,
 } from '../lib/api'
+import LayeredCanvas from '../components/LayeredCanvas.vue'
 
 const props = defineProps<{ imageId: string }>()
 
@@ -280,24 +281,17 @@ onMounted(() => {
           class="w-full max-w-2xl aspect-video rounded-xl border border-dashed border-slate-800 bg-slate-900/40 animate-pulse"
           data-testid="canvas-skeleton"
         />
-        <div
+        <LayeredCanvas
           v-else
-          class="relative w-full max-w-3xl"
-          :style="
-            canvasDims
-              ? { aspectRatio: `${canvasDims.width} / ${canvasDims.height}` }
-              : undefined
-          "
+          :width="canvasDims?.width ?? null"
+          :height="canvasDims?.height ?? null"
+          :background-url="backgroundUrl"
+          :elements="elements"
+          :layer-urls="layerByElement"
           data-testid="canvas"
         >
-          <img
-            v-if="backgroundUrl"
-            :src="backgroundUrl"
-            alt="Background"
-            class="absolute inset-0 w-full h-full object-contain rounded-lg"
-          />
           <svg
-            class="absolute inset-0 w-full h-full"
+            class="absolute inset-0 w-full h-full pointer-events-none"
             :viewBox="viewBox"
             preserveAspectRatio="xMidYMid meet"
           >
@@ -315,7 +309,7 @@ onMounted(() => {
               :data-testid="`bbox-${el.id}`"
             />
           </svg>
-        </div>
+        </LayeredCanvas>
       </section>
     </div>
   </main>

@@ -28,6 +28,8 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Pipeline orchestration pattern: represent each step as `{key, label, status, error}`; when retrying a step, reset it and all downstream steps to `pending` before re-running, so a failure mid-pipeline never leaves stale success state.
 - Typed API wrappers for each endpoint live alongside `uploadImage` in `frontend/src/lib/api.ts`. `postJson` takes `JsonValue`, so richer TS types (e.g. `Element[]`) need `as unknown as JsonValue` at the call site — keep the cast at the wrapper boundary, not inside UI code.
 - Server layer URLs are root-relative (`/storage/layers/...`); prefix with `API_BASE_URL` in the frontend so they resolve to the backend origin, not the Vite dev server.
+- Segmented layer PNGs and `background.png` are all written at the original image's full dimensions (Pillow `putalpha` + LANCZOS resize), so frontend layer stacking just needs `absolute inset-0 w-full h-full object-contain` with a container sized by aspectRatio — no per-layer offsets or scaling needed.
+- Reusable UI pieces live in `frontend/src/components/`; views in `frontend/src/views/` consume them. Use a default `<slot>` to let views inject overlays (e.g. bbox selection SVG) over layered content.
 
 ---
 
@@ -218,4 +220,21 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - `postJson`'s `JsonValue` contract forces `as unknown as JsonValue` when passing typed arrays — confine the cast to the endpoint wrapper so call sites stay strict.
   - `grid-cols-[280px_1fr]` in Tailwind v4 (arbitrary value grid) gives a sidebar + canvas layout without a dedicated class. The `min-h-[calc(100vh-65px)]` keeps the body below the 65-px header filling the viewport.
   - When you have a step-based UI with a running/pending/success/error enum, expose `data-status` attributes on each card — makes it trivial to assert from Vitest or Playwright later without coupling to class names.
+---
+
+## 2026-04-17 - US-010
+- Extracted `frontend/src/components/LayeredCanvas.vue`: a reusable component that renders a background image + per-element transparent layers stacked by `z_order`, sized by the original image's aspect ratio. Exposes a default slot so callers can inject overlays (e.g. the bbox selection SVG from the editor).
+- Refactored `frontend/src/views/Editor.vue` to consume `<LayeredCanvas>` — the selection SVG moves into the slot, and the hand-rolled `<div class="relative"> <img> + <svg>` block in the canvas area is gone.
+- Elements are sorted ascending by `z_order` inside the component so later elements paint on top, matching the perception endpoint's convention.
+- Each layer uses `pointer-events-none` so selection clicks on the bbox SVG aren't swallowed; background image uses `select-none` + `draggable="false"` to prevent accidental drags while editing.
+- Quality gates: `npm run build` (vue-tsc -b + vite build) passes clean; Vite dev server returns 200 on `/` and `/editor/abc`.
+- Browser verification: no MCP browser tool / `dev-browser` skill available in this environment. Manual verification recommended: start backend + frontend, upload an image, confirm the canvas area shows the reconstructed image with background + element layers stacked, and that clicking a list item still highlights the corresponding bbox.
+- Files changed:
+  - frontend/src/components/LayeredCanvas.vue (new)
+  - frontend/src/views/Editor.vue (use component + slot for overlay)
+- **Learnings for future iterations:**
+  - Segmented layers and `background.png` share the original image's pixel dimensions, so a single container sized by `aspectRatio: W/H` + `absolute inset-0 w-full h-full object-contain` on every layer is enough — no per-layer positioning.
+  - Prefer sorting layers by `z_order` inside the rendering component (ascending paints later on top) instead of relying on callers to pre-sort — keeps the contract simple and matches DOM stacking.
+  - When overlay SVGs sit above interactive layers, add `pointer-events-none` on the layer `<img>` elements; otherwise native image drag/select swallows clicks. Background is inert too (`select-none`, `draggable="false"`).
+  - Vue SFC default slot with scoped bindings (`<slot :width :height />`) gives overlay consumers the intrinsic dimensions without exposing `canvasDims` through yet another prop.
 ---
