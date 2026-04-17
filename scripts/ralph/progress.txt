@@ -30,6 +30,9 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Server layer URLs are root-relative (`/storage/layers/...`); prefix with `API_BASE_URL` in the frontend so they resolve to the backend origin, not the Vite dev server.
 - Segmented layer PNGs and `background.png` are all written at the original image's full dimensions (Pillow `putalpha` + LANCZOS resize), so frontend layer stacking just needs `absolute inset-0 w-full h-full object-contain` with a container sized by aspectRatio — no per-layer offsets or scaling needed.
 - Reusable UI pieces live in `frontend/src/components/`; views in `frontend/src/views/` consume them. Use a default `<slot>` to let views inject overlays (e.g. bbox selection SVG) over layered content.
+- Frontend unit tests use Vitest (`npm run test`). Config lives in `frontend/vitest.config.ts`; include pattern is `src/**/*.{test,spec}.ts`. Default environment is `node` (happy-dom is installed for future Vue component tests).
+- GSAP's global types expose `GSAPTween`, `GSAPTimeline`, etc. as top-level aliases — use those in tests instead of `import type gsap from 'gsap'`, because `erasableSyntaxOnly`/`noUnusedLocals` reports type-only imports as unused.
+- GSAP timelines accept any object as a tween target (not just DOM nodes), so animator unit tests can pass `{}` as the layer ref and assert `tween.vars.x`, `timeline.duration()`, `subTimeline.repeat()` without a DOM.
 
 ---
 
@@ -237,4 +240,24 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - Prefer sorting layers by `z_order` inside the rendering component (ascending paints later on top) instead of relying on callers to pre-sort — keeps the contract simple and matches DOM stacking.
   - When overlay SVGs sit above interactive layers, add `pointer-events-none` on the layer `<img>` elements; otherwise native image drag/select swallows clicks. Background is inert too (`select-none`, `draggable="false"`).
   - Vue SFC default slot with scoped bindings (`<slot :width :height />`) gives overlay consumers the intrinsic dimensions without exposing `canvasDims` through yet another prop.
+---
+
+## 2026-04-17 - US-011a
+- Added `frontend/src/lib/animator.ts` exporting `buildTimeline(dsl, layerRefs, options?)` that returns a paused `gsap.core.Timeline`. Each `ElementAnimation` becomes a sub-timeline added at offset 0, with `repeat: -1` when `loop=true`; sub-timelines run concurrently so total duration = max per-element duration.
+- Implemented 5 primitives: `translate` (x/y), `rotate` (rotation), `scale`, `opacity`, `path-follow` (one tween per waypoint summing to the requested duration). Each primitive honors step-level `easing`/`duration_ms` overrides and falls back to element-level defaults.
+- Defined typed errors `AnimatorError` / `UnknownPrimitiveError` / `MissingElementError` so callers (e.g. US-011b UI) can tell user-facing errors apart from GSAP runtime errors.
+- Installed `gsap@^3` runtime dep, `vitest@^4` + `@vitest/ui` + `happy-dom` dev deps; added `npm run test` / `test:watch` scripts; added `vitest.config.ts` (node env, `src/**/*.{test,spec}.ts`).
+- Added `frontend/src/lib/animator.test.ts` with 12 tests: one per primitive asserting duration + target values + easing, loop true/false on sub-timeline `repeat()`, multi-element concurrency (duration = max), missing element_id and null layer ref both raise `MissingElementError`, unknown primitive raises `UnknownPrimitiveError`.
+- Quality gates: `npm run test` passes (12/12); `npm run build` (vue-tsc -b + vite build) clean.
+- Files changed:
+  - frontend/package.json, frontend/package-lock.json
+  - frontend/vitest.config.ts (new)
+  - frontend/src/lib/animator.ts (new)
+  - frontend/src/lib/animator.test.ts (new)
+- **Learnings for future iterations:**
+  - GSAP reshapes `keyframes` input into internal Timelines, so `tween.vars.keyframes` is not the array you passed in. For testable path-follow semantics, emit one `tl.to(..., { x, y, duration })` per waypoint instead — each tween is then directly inspectable via `tween.vars.x` / `.vars.y`.
+  - `import type gsap from 'gsap'` does NOT satisfy `noUnusedLocals` under `vue-tsc` even when used purely in type positions; prefer the global aliases GSAP publishes (`GSAPTween`, `GSAPTimeline`, `GSAPTweenVars`, …) declared in `node_modules/gsap/types/index.d.ts`.
+  - Backend DSL uses `angle` for rotate but GSAP's tween prop is `rotation` (not `angle`) — keep that translation centralized in the animator.
+  - `gsap.timeline()` accepts plain objects as targets (it mutates properties), so Vitest can run in `node` environment without jsdom/happy-dom when only exercising the timeline builder.
+  - Use `timeline.getChildren(true, true, false)` to flatten all nested tweens across sub-timelines; `getChildren(false, false, true)` returns only top-level sub-timelines.
 ---
