@@ -7,3 +7,4 @@ BACKEND_ROOT: Path = Path(__file__).resolve().parents[1]
 STORAGE_ROOT: Path = BACKEND_ROOT / "storage"
 IMAGES_DIR: Path = STORAGE_ROOT / "images"
 PERCEPTION_DIR: Path = STORAGE_ROOT / "perception"
+LAYERS_DIR: Path = STORAGE_ROOT / "layers"

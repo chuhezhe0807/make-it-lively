@@ -60,6 +60,18 @@ curl -X POST http://localhost:8000/api/perception \
 Perception results are cached at `backend/storage/perception/{image_id}.json`; repeat
 calls skip the VLM.
 
+SAM2 segmentation (requires `REPLICATE_API_TOKEN`):
+
+```bash
+curl -X POST http://localhost:8000/api/segment \
+  -H "Content-Type: application/json" \
+  -d '{"image_id":"…","elements":[{"id":"cat","label":"Orange cat","bbox":[10,20,30,40],"z_order":2}]}'
+# {"image_id":"…","layers":[{"element_id":"cat","url":"/storage/layers/…/cat.png"}]}
+```
+
+Transparent layers are written to `backend/storage/layers/{image_id}/{element_id}.png` and
+served read-only at `/storage/layers/...`.
+
 ## Quality checks
 
 ```bash

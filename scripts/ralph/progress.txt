@@ -15,6 +15,9 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - `backend/storage/` is gitignored; create subdirs with `mkdir(parents=True, exist_ok=True)` on first write.
 - Anthropic SDK calls need `cast(ToolParam, ...)` / `cast(ToolChoiceToolParam, ...)` / `list[MessageParam]` typing because the Messages.create overloads reject free-form dicts under strict mypy.
 - For Anthropic-backed endpoints, expose a module-level `get_anthropic_client()` factory so tests can `monkeypatch.setattr(router_module, "get_anthropic_client", lambda: stub)`; keep the real function returning `anthropic.Anthropic()` (reads `ANTHROPIC_API_KEY`).
+- For Replicate-backed endpoints, follow the same factory pattern: `get_replicate_client()` returns `ReplicateClient()` (imported from `replicate.client`, NOT `replicate.Client` — the top-level re-export is flagged by mypy strict `attr-defined`).
+- Derived layer assets are served via a `StaticFiles` mount in `app/main.py` (e.g. `/storage/layers`). Ensure the target directory exists (`mkdir(parents=True, exist_ok=True)`) before calling `app.mount`, otherwise Starlette raises at import time.
+- Replicate's `Client.run(...)` return shape is `Any` in practice (bytes, URL str, file-like with `.read()`, or a 1-element list). Keep a small `_coerce_*` helper per endpoint to normalize before doing work.
 
 ---
 
@@ -76,4 +79,27 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - Use `block.input` on tool_use blocks — it's already a `dict`, no `json.loads` needed. Guard with `isinstance(block.input, dict)` to satisfy mypy and reject weird results.
   - Stub the Anthropic client with a plain class exposing `.messages.create(**kwargs)`; no need to import `anthropic.types.Message` for tests.
   - `fastapi.testclient.TestClient` sends JSON bodies with `client.post(url, json=...)`; perception endpoint is JSON-only (no multipart).
+---
+
+## 2026-04-17 - US-004
+- Added `POST /api/segment` that accepts `{image_id, elements: [...]}`, runs Replicate `meta/sam-2` per element (centre-point click derived from the bbox), applies the returned mask as alpha to the original image, and writes a transparent PNG layer to `backend/storage/layers/{image_id}/{element_id}.png`.
+- Exposed `get_replicate_client()` factory (returns `replicate.client.Client()`, reads `REPLICATE_API_TOKEN`) so tests can monkeypatch a stub. Added `_coerce_mask_bytes` to absorb bytes / URL str / file-like / 1-element list outputs from Replicate.
+- Mounted `/storage/layers` as a StaticFiles directory in `app/main.py` so the frontend can fetch layer PNGs (and added `LAYERS_DIR` in `app/storage.py`).
+- Added `replicate>=1.0` runtime dependency.
+- Tests cover: success writing both layers + correct click_coords (12,16 for bbox [4,8,16,16]), file-like Replicate output, missing image 404, unexpected output shape 502, and empty-elements short-circuit.
+- Files changed:
+  - backend/pyproject.toml, backend/uv.lock
+  - backend/app/main.py (mount StaticFiles + include segment router)
+  - backend/app/routers/__init__.py (unchanged — package marker)
+  - backend/app/routers/segment.py (new)
+  - backend/app/storage.py (add LAYERS_DIR)
+  - backend/tests/test_segment.py (new)
+  - backend/README.md (document endpoint)
+- **Learnings for future iterations:**
+  - `import replicate; replicate.Client` trips mypy strict with `attr-defined` / `name-defined`. Use `from replicate.client import Client as ReplicateClient` instead — replicate 1.x ships `py.typed`, but only the submodule path is cleanly typed.
+  - `ruff` enforces import order; `from replicate…` sorts before `from PIL…` even though the letters disagree with eye order — run `uv run ruff check --fix .` to apply.
+  - `StaticFiles(directory=...)` validates the directory at construction (default `check_dir=True`). Create the dir at import time in `main.py` so reloads / tests don't explode.
+  - `PIL.Image.putalpha(mask_L)` composites an L-mode mask as the alpha channel — combined with `convert("RGBA")` this gives a clean transparent cut-out in one shot.
+  - When the Replicate output shape is unknown, the safest quick-normalize order is: unwrap 1-element list → check `.read()` duck-typing → check `bytes`/`str` → else 502. Avoids false positives on strings (which also expose `.read` via wrappers? — they don't, but we check `.read` first anyway since it's unambiguous on FileOutput).
+  - bbox format across endpoints is `[x, y, w, h]` (top-left origin). Centre point is `(x + w/2, y + h/2)`; keep this consistent with the perception tool schema so downstream consumers don't drift.
 ---
