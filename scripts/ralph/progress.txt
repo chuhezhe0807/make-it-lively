@@ -1,0 +1,31 @@
+# Ralph Progress Log
+Started: Fri Apr 17 14:53:15 CST 2026
+---
+
+## Codebase Patterns
+- Backend uses `uv` for dependency management; install with `uv sync --extra dev`.
+- Backend quality gates: `uv run ruff check .`, `uv run mypy`, `uv run pytest` (run from `backend/`).
+- mypy is configured with `strict = true` and `files = ["app", "tests"]`; every new function needs type annotations.
+- FastAPI app lives at `backend/app/main.py` and is served via `uvicorn app.main:app --reload`.
+- CORS is pinned to `http://localhost:5173` for the Vite frontend.
+- Tests use `fastapi.testclient.TestClient`; place them in `backend/tests/` with `__init__.py`.
+
+---
+
+## 2026-04-17 - US-001
+- Implemented FastAPI skeleton with `/health` endpoint returning `{"status": "ok"}`.
+- Added CORSMiddleware allowing `http://localhost:5173`.
+- Added pytest coverage for health response and CORS preflight.
+- Wrote `backend/README.md` with setup/run/test instructions and env var list.
+- Verified `uv run uvicorn app.main:app` starts and serves `/health` 200.
+- Files changed:
+  - backend/app/main.py (new)
+  - backend/tests/__init__.py (new)
+  - backend/tests/test_health.py (new)
+  - backend/README.md (new)
+- **Learnings for future iterations:**
+  - `uv sync --extra dev` picks up `[project.optional-dependencies].dev` and installs pytest/ruff/mypy/httpx together.
+  - TestClient in FastAPI 0.136 / Starlette 1.0 returns 200 (not 204) on OPTIONS preflight when CORS is configured — assert 200.
+  - `pyproject.toml` already enforces `pythonpath = ["."]` and `testpaths = ["tests"]`, so imports use `from app.main import app`.
+  - mypy strict mode requires explicit return types even on trivial handlers (e.g. `-> dict[str, str]`).
+---
