@@ -109,5 +109,48 @@ uv run pytest
 
 ## Environment variables
 
-- `ANTHROPIC_API_KEY` — required for perception and animation planning endpoints.
-- `REPLICATE_API_TOKEN` — required for segmentation and inpainting endpoints.
+Required keys:
+
+- **Anthropic** — used by `/api/perception` and `/api/plan-animation`. Set
+  **one** of:
+  - `ANTHROPIC_API_KEY` — sent as `x-api-key` (native Anthropic).
+  - `ANTHROPIC_AUTH_TOKEN` — sent as `Authorization: Bearer …` (common for
+    OneAPI / reverse-proxy gateways).
+- **Replicate** — used by `/api/segment` and `/api/inpaint`:
+  - `REPLICATE_API_TOKEN` — required unless the fallback below is enabled.
+
+Optional:
+
+- `ANTHROPIC_BASE_URL` — point the Anthropic SDK at a proxy/gateway.
+- `USE_REPLICATE_FALLBACK` — force local Pillow fallbacks even when
+  `REPLICATE_API_TOKEN` is set. Truthy values: `1` / `true` / `yes`.
+
+### Replicate fallback mode
+
+If `REPLICATE_API_TOKEN` is missing (or `USE_REPLICATE_FALLBACK` is truthy),
+the backend uses local Pillow implementations instead of Replicate:
+
+- `/api/segment`: rectangular bbox crop on a transparent canvas (no SAM2
+  silhouette; edges are straight rectangles).
+- `/api/inpaint`: feathered Gaussian-blur composite over the masked regions
+  (not a true inpaint; hides the hole well enough to sit under the foreground).
+
+This keeps the whole pipeline runnable without a Replicate account.
+
+### How to supply the values
+
+1. **`backend/.env` file (recommended for local dev)**
+   Copy the template and fill in your keys. `app/config.py` loads the file at
+   startup via `python-dotenv`. `backend/.env` is gitignored.
+   ```bash
+   cp backend/.env.example backend/.env
+   # then edit backend/.env
+   ```
+
+2. **Export in the shell** — real environment variables take precedence over
+   the `.env` file (useful in CI or when you want to override locally):
+   ```bash
+   export ANTHROPIC_AUTH_TOKEN=...
+   export ANTHROPIC_BASE_URL=https://your-proxy.example.com/
+   export USE_REPLICATE_FALLBACK=true
+   ```

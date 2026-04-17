@@ -33,6 +33,10 @@ def isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     images_dir.mkdir()
     monkeypatch.setattr(storage, "IMAGES_DIR", images_dir)
     monkeypatch.setattr(storage, "LAYERS_DIR", layers_dir)
+    # Force the real Replicate code path regardless of the developer's .env:
+    # tests that want the fallback toggle it explicitly.
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "test-replicate-token")
+    monkeypatch.delenv("USE_REPLICATE_FALLBACK", raising=False)
     return tmp_path
 
 
@@ -172,3 +176,62 @@ def test_segment_empty_elements_returns_empty_layers(
     assert response.status_code == 200
     assert response.json() == {"image_id": image_id, "layers": []}
     assert stub.calls == []
+
+
+def test_segment_uses_pillow_fallback_when_replicate_disabled(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When USE_REPLICATE_FALLBACK is on, no Replicate call is made and the
+    produced layer is a transparent canvas with the bbox region pasted in."""
+    image_id = "seg-fallback"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png", width=40, height=30)
+
+    monkeypatch.setenv("USE_REPLICATE_FALLBACK", "true")
+    # Even supplying a stub, the fallback path should NOT touch Replicate.
+    stub = _StubReplicateClient(output=_mask_png_bytes())
+    monkeypatch.setattr(segment, "get_replicate_client", lambda: stub)
+
+    response = client.post(
+        "/api/segment",
+        json={
+            "image_id": image_id,
+            "elements": [
+                {"id": "cat", "label": "Orange cat", "bbox": [5, 5, 10, 10], "z_order": 1}
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert stub.calls == []  # Replicate never called.
+
+    cat_path = storage.LAYERS_DIR / image_id / "cat.png"
+    assert cat_path.exists()
+    layer = Image.open(cat_path)
+    assert layer.mode == "RGBA"
+    # Layer must match the full canvas size so it aligns with the background.
+    assert layer.size == (40, 30)
+    # Pixel inside the bbox is fully opaque; outside is fully transparent.
+    inside = layer.getpixel((6, 6))
+    outside = layer.getpixel((0, 0))
+    assert isinstance(inside, tuple) and inside[3] == 255
+    assert isinstance(outside, tuple) and outside[3] == 0
+
+
+def test_segment_fallback_rejects_bbox_outside_image(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_id = "seg-oob"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png", width=32, height=32)
+
+    monkeypatch.setenv("USE_REPLICATE_FALLBACK", "true")
+    response = client.post(
+        "/api/segment",
+        json={
+            "image_id": image_id,
+            # Entire bbox lies to the right of the image.
+            "elements": [
+                {"id": "cat", "label": "Cat", "bbox": [100, 0, 10, 10], "z_order": 1}
+            ],
+        },
+    )
+    assert response.status_code == 422

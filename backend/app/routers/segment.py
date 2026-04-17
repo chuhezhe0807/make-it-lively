@@ -11,7 +11,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from replicate.client import Client as ReplicateClient
 
-from app import storage
+from app import config, storage
 
 SAM2_MODEL: Final[str] = "meta/sam-2"
 
@@ -117,20 +117,79 @@ def _run_sam2(
     return _coerce_mask_bytes(output)
 
 
+def _segment_with_fallback(
+    image_bytes: bytes,
+    bbox: list[float],
+    canvas_size: tuple[int, int],
+) -> bytes:
+    """Rectangular-crop fallback used when Replicate SAM2 is unavailable.
+
+    Strategy: build a fully-transparent canvas the same size as the source
+    image and paste the pixels inside ``bbox`` at their original position.
+    The resulting layer aligns correctly with the background under it, so
+    the frontend's LayeredCanvas can stack it without any offset math. The
+    trade-off versus SAM2 is a hard rectangular silhouette rather than a
+    pixel-accurate mask.
+    """
+    x, y, w, h = bbox
+    # Clamp to the canvas so slightly oversized VLM boxes don't crash crop().
+    left = max(0, int(round(x)))
+    top = max(0, int(round(y)))
+    right = min(canvas_size[0], int(round(x + w)))
+    bottom = min(canvas_size[1], int(round(y + h)))
+    if right <= left or bottom <= top:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"bbox {bbox} has no overlap with the image bounds",
+        )
+
+    base = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    cropped = base.crop((left, top, right, bottom))
+
+    # Transparent canvas at original size keeps per-layer coordinates aligned
+    # with the background layer produced by /api/inpaint.
+    layer = Image.new("RGBA", canvas_size, color=(0, 0, 0, 0))
+    layer.paste(cropped, (left, top))
+
+    buf = io.BytesIO()
+    layer.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @router.post("/segment", response_model=SegmentResponse)
 def segment_elements(request: SegmentRequest) -> SegmentResponse:
     image_bytes, media_type = _find_image(request.image_id)
-    image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
-    image_data_uri = f"data:{media_type};base64,{image_b64}"
+
+    # Capture the canvas size once so both code paths use the same value.
+    canvas_size = Image.open(io.BytesIO(image_bytes)).size
 
     layers_dir = storage.LAYERS_DIR / request.image_id
     layers_dir.mkdir(parents=True, exist_ok=True)
 
-    client = get_replicate_client()
+    # Two code paths: real SAM2 via Replicate, or a local Pillow fallback.
+    # The fallback is picked when the caller has no Replicate token (or opts
+    # in explicitly via USE_REPLICATE_FALLBACK=true).
+    use_fallback = config.use_replicate_fallback()
+
+    client: ReplicateClient | None = None
+    image_data_uri: str | None = None
+    if not use_fallback:
+        client = get_replicate_client()
+        image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+        image_data_uri = f"data:{media_type};base64,{image_b64}"
+
     layers: list[Layer] = []
     for element in request.elements:
-        mask_bytes = _run_sam2(client, image_data_uri, element.bbox)
-        layer_bytes = _apply_mask(image_bytes, mask_bytes)
+        if use_fallback:
+            layer_bytes = _segment_with_fallback(image_bytes, element.bbox, canvas_size)
+        else:
+            # These locals were populated above when use_fallback is False;
+            # the asserts narrow their types for mypy.
+            assert client is not None  # noqa: S101 — narrow for mypy
+            assert image_data_uri is not None  # noqa: S101 — narrow for mypy
+            mask_bytes = _run_sam2(client, image_data_uri, element.bbox)
+            layer_bytes = _apply_mask(image_bytes, mask_bytes)
+
         layer_path = layers_dir / f"{element.id}.png"
         layer_path.write_bytes(layer_bytes)
         layers.append(

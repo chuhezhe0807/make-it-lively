@@ -10,7 +10,7 @@ from anthropic.types import MessageParam, ToolChoiceToolParam, ToolParam
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app import storage
+from app import config, storage
 
 VLM_MODEL: Final[str] = "claude-opus-4-7"
 MAX_TOKENS: Final[int] = 16000
@@ -81,7 +81,14 @@ class PerceptionResponse(BaseModel):
 
 
 def get_anthropic_client() -> anthropic.Anthropic:
-    """Return an Anthropic client; monkeypatched in tests."""
+    """Return an Anthropic client; monkeypatched in tests.
+
+    Honors ``ANTHROPIC_BASE_URL`` so traffic can be routed through a proxy
+    or gateway. When the env var is unset, the SDK uses its default endpoint.
+    """
+    base_url = config.anthropic_base_url()
+    if base_url is not None:
+        return anthropic.Anthropic(base_url=base_url)
     return anthropic.Anthropic()
 
 

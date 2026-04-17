@@ -5,3 +5,7 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 storage/
+
+# Local secrets loaded by app/config.py via python-dotenv.
+# Keep .env.example committed (template); never commit .env itself.
+.env

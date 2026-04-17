@@ -8,6 +8,7 @@ from anthropic.types import MessageParam, ToolChoiceToolParam, ToolParam
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
 
+from app import config
 from app.schemas.animation import (
     PRIMITIVE_TYPES,
     AnimationPlan,
@@ -106,7 +107,14 @@ class PlanAnimationRequest(BaseModel):
 
 
 def get_anthropic_client() -> anthropic.Anthropic:
-    """Return an Anthropic client; monkeypatched in tests."""
+    """Return an Anthropic client; monkeypatched in tests.
+
+    Honors ``ANTHROPIC_BASE_URL`` so traffic can be routed through a proxy
+    or gateway. When the env var is unset, the SDK uses its default endpoint.
+    """
+    base_url = config.anthropic_base_url()
+    if base_url is not None:
+        return anthropic.Anthropic(base_url=base_url)
     return anthropic.Anthropic()
 
 

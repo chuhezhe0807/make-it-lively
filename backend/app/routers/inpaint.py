@@ -7,11 +7,11 @@ import urllib.request
 from typing import Any, Final, cast
 
 from fastapi import APIRouter, HTTPException, status
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 from pydantic import BaseModel, Field
 from replicate.client import Client as ReplicateClient
 
-from app import storage
+from app import config, storage
 
 INPAINT_MODEL: Final[str] = "stability-ai/stable-diffusion-inpainting"
 INPAINT_PROMPT: Final[str] = (
@@ -105,6 +105,42 @@ def _save_background(image_id: str, data: bytes, size: tuple[int, int]) -> None:
     (layers_dir / "background.png").write_bytes(buf.getvalue())
 
 
+def _inpaint_with_fallback(
+    image_bytes: bytes,
+    masks: list[Mask],
+    size: tuple[int, int],
+) -> bytes:
+    """Blur-fill fallback used when Replicate inpainting is unavailable.
+
+    Strategy: Gaussian-blur the whole source image, then composite the
+    blurred pixels onto the bbox regions of the original via a feathered
+    mask. The result is not a true inpaint — the blurred smear still hints
+    at the removed element — but it hides the hard silhouette well enough
+    to sit underneath the foreground layers without breaking the illusion.
+    """
+    base = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+    # Heavy blur fills the "hole" with softened surrounding pixels.
+    blurred = base.filter(ImageFilter.GaussianBlur(radius=32))
+
+    # Binary mask from the union of element bboxes.
+    mask_img = Image.new("L", size, color=0)
+    draw = ImageDraw.Draw(mask_img)
+    for m in masks:
+        x, y, w, h = m.bbox
+        draw.rectangle((x, y, x + w, y + h), fill=255)
+
+    # Feather the mask edges so the blurred patch blends into the rest of
+    # the background — a hard edge looks obviously fake.
+    feathered = mask_img.filter(ImageFilter.GaussianBlur(radius=16))
+
+    out = Image.composite(blurred, base, feathered)
+
+    buf = io.BytesIO()
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @router.post("/inpaint", response_model=InpaintResponse)
 def inpaint_background(request: InpaintRequest) -> InpaintResponse:
     image_bytes, media_type = _find_image(request.image_id)
@@ -119,6 +155,16 @@ def inpaint_background(request: InpaintRequest) -> InpaintResponse:
             background_url=f"/storage/layers/{request.image_id}/background.png",
         )
 
+    if config.use_replicate_fallback():
+        # Local Pillow fallback — no Replicate call.
+        filled_bytes = _inpaint_with_fallback(image_bytes, request.masks, size)
+        _save_background(request.image_id, filled_bytes, size)
+        return InpaintResponse(
+            image_id=request.image_id,
+            background_url=f"/storage/layers/{request.image_id}/background.png",
+        )
+
+    # Real inpainting via Replicate SD inpainting model.
     mask_bytes = _build_combined_mask(size, request.masks)
     image_b64 = base64.standard_b64encode(image_bytes).decode("ascii")
     mask_b64 = base64.standard_b64encode(mask_bytes).decode("ascii")

@@ -11,6 +11,9 @@ dependencies = [
     "pillow>=10.4",
     "anthropic>=0.96.0",
     "replicate>=1.0",
+    # Loads secrets from a local .env file at startup so developers do not
+    # have to `export` ANTHROPIC_API_KEY / REPLICATE_API_TOKEN in every shell.
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

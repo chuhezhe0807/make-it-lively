@@ -5,7 +5,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app import storage
+# Must be imported first: populates os.environ from backend/.env before any
+# router module instantiates an SDK client that reads credentials.
+from app import (
+    config,  # noqa: F401
+    storage,
+)
 from app.routers import inpaint, perception, plan_animation, segment, upload
 
 app = FastAPI(title="Make It Lively", version="0.1.0")

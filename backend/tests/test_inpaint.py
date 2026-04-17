@@ -33,6 +33,10 @@ def isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     images_dir.mkdir()
     monkeypatch.setattr(storage, "IMAGES_DIR", images_dir)
     monkeypatch.setattr(storage, "LAYERS_DIR", layers_dir)
+    # Force the real Replicate code path regardless of the developer's .env:
+    # tests that want the fallback toggle it explicitly.
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "test-replicate-token")
+    monkeypatch.delenv("USE_REPLICATE_FALLBACK", raising=False)
     return tmp_path
 
 
@@ -171,3 +175,30 @@ def test_inpaint_empty_masks_copies_original_without_calling_replicate(
     }
     assert (storage.LAYERS_DIR / image_id / "background.png").exists()
     assert stub.calls == []
+
+
+def test_inpaint_uses_pillow_fallback_when_replicate_disabled(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When USE_REPLICATE_FALLBACK is on, no Replicate call is made and the
+    background is a Pillow-blur composite of the original."""
+    image_id = "inp-fallback"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png", width=40, height=30)
+
+    monkeypatch.setenv("USE_REPLICATE_FALLBACK", "true")
+    stub = _StubReplicateClient(output=_filled_png_bytes())
+    monkeypatch.setattr(inpaint, "get_replicate_client", lambda: stub)
+
+    response = client.post(
+        "/api/inpaint",
+        json={"image_id": image_id, "masks": _sample_masks()[:1]},
+    )
+
+    assert response.status_code == 200
+    assert stub.calls == []  # Replicate never called.
+
+    bg_path = storage.LAYERS_DIR / image_id / "background.png"
+    assert bg_path.exists()
+    bg_img = Image.open(bg_path)
+    assert bg_img.mode == "RGB"
+    assert bg_img.size == (40, 30)
