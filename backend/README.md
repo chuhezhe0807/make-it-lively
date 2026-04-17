@@ -48,6 +48,18 @@ curl -F "file=@./sample.png" http://localhost:8000/api/upload
 
 Uploaded files are written to `backend/storage/images/{image_id}.{ext}` (gitignored).
 
+VLM perception (requires `ANTHROPIC_API_KEY`):
+
+```bash
+curl -X POST http://localhost:8000/api/perception \
+  -H "Content-Type: application/json" \
+  -d '{"image_id":"…"}'
+# {"image_id":"…","elements":[{"id":"cat","label":"Orange cat","bbox":[…],"z_order":2}]}
+```
+
+Perception results are cached at `backend/storage/perception/{image_id}.json`; repeat
+calls skip the VLM.
+
 ## Quality checks
 
 ```bash

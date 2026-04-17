@@ -13,6 +13,8 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Use `Annotated[UploadFile, File(...)]` style for FastAPI dependencies — avoids ruff B008 while staying mypy-clean.
 - Filesystem paths for derived assets live in `backend/app/storage.py` (`IMAGES_DIR`, etc.). Import the module (not the constant) so tests can `monkeypatch.setattr(storage, "IMAGES_DIR", tmp_path)`.
 - `backend/storage/` is gitignored; create subdirs with `mkdir(parents=True, exist_ok=True)` on first write.
+- Anthropic SDK calls need `cast(ToolParam, ...)` / `cast(ToolChoiceToolParam, ...)` / `list[MessageParam]` typing because the Messages.create overloads reject free-form dicts under strict mypy.
+- For Anthropic-backed endpoints, expose a module-level `get_anthropic_client()` factory so tests can `monkeypatch.setattr(router_module, "get_anthropic_client", lambda: stub)`; keep the real function returning `anthropic.Anthropic()` (reads `ANTHROPIC_API_KEY`).
 
 ---
 
@@ -54,4 +56,24 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - Test images should be generated on-the-fly with `PIL.Image.new(...).save(buf, format=...)` — avoids fixture files and keeps the repo clean.
   - To test oversized rejection without big payloads, `monkeypatch.setattr(upload, "MAX_FILE_SIZE_BYTES", small)` and send a modestly larger payload.
   - Import the `storage` module (not the constant directly) so tests can monkeypatch `storage.IMAGES_DIR` per-test via `tmp_path`.
+---
+
+## 2026-04-17 - US-003
+- Added `POST /api/perception` that base64-encodes the stored image, calls Claude (`claude-opus-4-7`) with a forced `report_elements` tool_use, and caches the structured `{id, label, bbox, z_order}` list to `backend/storage/perception/{image_id}.json`. Returns cached response on repeat calls.
+- Exposed `get_anthropic_client()` factory so tests swap in a stub; missing image returns 404; malformed VLM response returns 502.
+- Added `anthropic` runtime dependency and `PERCEPTION_DIR` in `backend/app/storage.py`.
+- Tests cover success + cache-write, cache hit skipping the VLM, missing image, and unstructured response.
+- Files changed:
+  - backend/pyproject.toml, backend/uv.lock
+  - backend/app/main.py (include perception router)
+  - backend/app/routers/perception.py (new)
+  - backend/app/storage.py (add PERCEPTION_DIR)
+  - backend/tests/test_perception.py (new)
+  - backend/README.md (document endpoint + env var)
+- **Learnings for future iterations:**
+  - Anthropic Python SDK 0.96: `messages.create` overload rejects loose dicts; cast `tools`/`tool_choice`/`messages` to their SDK types (`ToolParam`, `ToolChoiceToolParam`, `list[MessageParam]`) to keep strict mypy happy without giving up the readable dict form.
+  - `media_type` on the image source is a `Literal` union in the SDK; `cast(Any, media_type)` is the lightest way to pass a dynamic extension-derived string.
+  - Use `block.input` on tool_use blocks — it's already a `dict`, no `json.loads` needed. Guard with `isinstance(block.input, dict)` to satisfy mypy and reject weird results.
+  - Stub the Anthropic client with a plain class exposing `.messages.create(**kwargs)`; no need to import `anthropic.types.Message` for tests.
+  - `fastapi.testclient.TestClient` sends JSON bodies with `client.post(url, json=...)`; perception endpoint is JSON-only (no multipart).
 ---
