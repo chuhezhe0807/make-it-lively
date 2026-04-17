@@ -11,6 +11,7 @@ import {
   segmentElements,
 } from '../lib/api'
 import { buildTimeline, type AnimationDSL } from '../lib/animator'
+import { downloadBlob, exportGif } from '../lib/gifExporter'
 import LayeredCanvas from '../components/LayeredCanvas.vue'
 
 const props = defineProps<{ imageId: string }>()
@@ -43,6 +44,9 @@ const isPlanning = ref(false)
 const planError = ref<string | null>(null)
 const hasTimeline = ref(false)
 const isPlaying = ref(false)
+const isExporting = ref(false)
+const exportProgress = ref(0)
+const exportError = ref<string | null>(null)
 let currentTimeline: gsap.core.Timeline | null = null
 
 const layerByElement = computed<Record<string, string>>(() => {
@@ -263,6 +267,53 @@ function onReset(): void {
   isPlaying.value = false
 }
 
+async function onExportGif(): Promise<void> {
+  if (!currentTimeline || !canvasDims.value || isExporting.value) return
+  const refs = canvasRef.value?.getLayerRefs() ?? {}
+  const sample = Object.values(refs).find(
+    (el): el is HTMLImageElement => el instanceof HTMLImageElement,
+  )
+  const renderedWidth = sample?.clientWidth ?? canvasDims.value.width
+  const renderedHeight = sample?.clientHeight ?? canvasDims.value.height
+  if (renderedWidth <= 0 || renderedHeight <= 0) {
+    exportError.value = 'Canvas is not visible yet'
+    return
+  }
+
+  isExporting.value = true
+  exportProgress.value = 0
+  exportError.value = null
+  isPlaying.value = false
+
+  try {
+    const blob = await exportGif(
+      {
+        timeline: currentTimeline,
+        intrinsicWidth: canvasDims.value.width,
+        intrinsicHeight: canvasDims.value.height,
+        renderedWidth,
+        renderedHeight,
+        backgroundUrl: backgroundUrl.value,
+        elements: elements.value,
+        layerUrls: layerByElement.value,
+        layerRefs: refs,
+      },
+      {
+        fps: 15,
+        minDurationSeconds: 2,
+        onProgress: (fraction) => {
+          exportProgress.value = fraction
+        },
+      },
+    )
+    downloadBlob(blob, 'make-it-lively.gif')
+  } catch (err) {
+    exportError.value = formatError(err)
+  } finally {
+    isExporting.value = false
+  }
+}
+
 onMounted(() => {
   void runPipelineFrom('perception')
 })
@@ -480,6 +531,41 @@ onBeforeUnmount(() => {
             >
               Reset
             </button>
+          </div>
+
+          <div class="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              class="rounded-md bg-emerald-500 hover:bg-emerald-400 text-white font-medium py-2 px-4 transition-colors disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed"
+              :disabled="!hasTimeline || isExporting"
+              data-testid="export-gif"
+              @click="onExportGif"
+            >
+              {{ isExporting ? 'Exporting…' : 'Export GIF' }}
+            </button>
+            <div
+              v-if="isExporting"
+              class="flex flex-col gap-1"
+              data-testid="export-progress"
+            >
+              <div class="h-2 w-full overflow-hidden rounded bg-slate-800">
+                <div
+                  class="h-full bg-emerald-400 transition-[width] duration-150"
+                  :style="{ width: `${Math.round(exportProgress * 100)}%` }"
+                />
+              </div>
+              <p class="text-xs text-slate-400">
+                Rendering frames… {{ Math.round(exportProgress * 100) }}%
+              </p>
+            </div>
+            <p
+              v-if="exportError"
+              class="text-xs text-red-200 bg-red-500/10 border border-red-500/40 rounded-md p-2"
+              role="alert"
+              data-testid="export-error"
+            >
+              {{ exportError }}
+            </p>
           </div>
         </div>
       </aside>

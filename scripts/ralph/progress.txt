@@ -36,6 +36,11 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Child components that wrap animated DOM (e.g. `LayeredCanvas`) expose layer handles via `defineExpose({ getLayerRefs })` — callers access them with `ref<InstanceType<typeof LayeredCanvas> | null>` + `canvasRef.value?.getLayerRefs()`. Keeps the DOM `<img>`s encapsulated while letting views feed them to `buildTimeline`.
 - When rebuilding a GSAP timeline (user re-runs plan), dispose the previous one with `timeline.kill()` AND reset inline `style.transform` / `style.opacity` on each layer before building the new one — otherwise GSAP's residual transforms bleed into the next animation's initial state.
 - `import type { AnimationDSL } from './animator'` inside `api.ts` keeps backend response typing in sync with the animator's DSL without duplicating interfaces (single source of truth). Avoid circular imports by keeping animator.ts free of api.ts imports.
+- For npm packages that ship no types (e.g. `gifenc`), add a minimal `frontend/src/types/<pkg>.d.ts` ambient module declaration — `tsconfig.app.json` already globs `src/**/*.ts`, so no include changes are needed.
+- GSAP's `gsap.getProperty(target, prop)` reads the current (animated) value at whatever time the timeline is paused at. Seek via `timeline.pause(t)` then read x/y/rotation/scale/opacity to drive offscreen canvas rendering of the same frame — no DOM-to-canvas libraries required.
+- GSAP's default transform-origin is 50% 50%, so the canvas equivalent of a GSAP tween is `translate(w/2 + x, h/2 + y)` → `rotate` → `scale` → `drawImage(img, -w/2, -h/2, w, h)`. Wrap each layer draw in save/restore and use `ctx.globalAlpha` for opacity.
+- GSAP x/y are in CSS-pixel space (what was set); the offscreen canvas runs at intrinsic image dims. Scale by `intrinsic/rendered` when translating so motion amplitude matches what the user saw in the browser.
+- Fresh `new Image()` objects with `img.crossOrigin = 'anonymous'` let canvas read pixel data without tainting — FastAPI's top-level CORSMiddleware already wraps the `/storage/layers` StaticFiles mount, so no backend change is needed to support `canvas.getImageData` after drawing the layer PNGs.
 
 ---
 
@@ -284,4 +289,27 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - `timeline.pause(0)` is the one-liner for Reset: pauses playback AND seeks to the start, so subsequent Play replays from t=0 without needing `restart()` + pause gymnastics.
   - Filter the planner's DSL down to elements that actually have registered refs before calling `buildTimeline` — otherwise one missing layer throws `MissingElementError` and kills the whole animation. Raising a friendlier error when the filtered list is empty beats a raw GSAP trace.
   - Callback signatures on `timeline.eventCallback('onComplete', cb)` expect `(this: gsap.core.Timeline) => void` — keep the handler an arrow that only touches refs (no `this` access) to stay mypy… er, tsc-clean.
+---
+
+## 2026-04-17 - US-012
+- Added "Export GIF" button and progress UI to the editor's right panel (under Playback). Button is disabled until a timeline exists, swaps label to "Exporting…" while recording, shows a live percent progress bar, and surfaces any error inline without touching the static canvas.
+- Wrote `frontend/src/lib/gifExporter.ts`: drives a paused GSAP timeline frame-by-frame, reads each layer's current `x/y/rotation/scale/opacity` via `gsap.getProperty`, renders each frame on an offscreen canvas at the image's intrinsic dimensions (layers drawn in z_order with canvas transforms), then encodes via `gifenc` (`quantize` + `applyPalette` + `writeFrame` with 15fps delays and `repeat: 0` for infinite loop) and returns a `Blob`. Helper `downloadBlob` triggers the browser download of `make-it-lively.gif`.
+- Duration defaults to `max(2s, timeline.duration())` so the output always meets the ≥2s acceptance criterion even for short non-looping plans; fps defaults to 15. The timeline is always returned to `pause(0)` in a `finally` block so the UI state matches after export.
+- Fresh CORS-safe `Image` objects are loaded at export time (not reused from the DOM refs) so `getImageData` doesn't taint the canvas — FastAPI's top-level CORSMiddleware already covers the `/storage/layers` StaticFiles mount.
+- Added `frontend/src/types/gifenc.d.ts` to type the untyped `gifenc` module (`GIFEncoder`, `quantize`, `applyPalette`).
+- Quality gates: `npm run build` (vue-tsc -b + vite build) green; `npm run test` passes 12/12 animator tests; no backend changes.
+- Browser verification: no MCP browser / dev-browser skill available in this environment. Manual check recommended — upload image, run pipeline, prompt an animation, click "Export GIF", confirm the progress bar advances, `make-it-lively.gif` downloads, and the file plays at ≥2s with visible element motion.
+- Files changed:
+  - frontend/package.json, frontend/package-lock.json (added `gifenc`)
+  - frontend/src/types/gifenc.d.ts (new)
+  - frontend/src/lib/gifExporter.ts (new)
+  - frontend/src/views/Editor.vue (Export GIF button + progress + handler)
+- **Learnings for future iterations:**
+  - `gifenc` has no TS types; a ~30-line ambient `.d.ts` covers the three functions we use (`GIFEncoder()`, `quantize`, `applyPalette`). `tsconfig.app.json`'s `src/**/*.ts` include picks it up automatically.
+  - Pausing a GSAP timeline at a specific time uses `timeline.pause(t)` (not `timeline.seek(t)`) — the pause overload does both seek and pause in one call, and is the cleanest way to sample discrete frames.
+  - Canvas 2D transforms for a GSAP-animated element: the default transform-origin is center, so translate by `(w/2 + x*scaleX, h/2 + y*scaleY)` → rotate (converted to radians) → scale → `drawImage(img, -w/2, -h/2, w, h)`. `ctx.globalAlpha` handles opacity separately.
+  - GSAP dx/dy are CSS-pixel; the offscreen canvas uses intrinsic image pixels. Scale translation by `intrinsic/rendered` so the recorded motion amplitude matches what the user saw on-screen.
+  - `img.crossOrigin = 'anonymous'` must be set BEFORE `img.src = …` — setting it after assigning src is silently ignored and the canvas ends up tainted on `getImageData`.
+  - Wrap the per-frame work with `await new Promise<void>(r => setTimeout(r, 0))` so the UI progress bar actually re-renders between frames instead of blocking the event loop for the full render.
+  - Always return the timeline to a known state in a `finally` (`pause(0)`) — otherwise an export that throws mid-loop leaves layers stuck at a weird time offset.
 ---
