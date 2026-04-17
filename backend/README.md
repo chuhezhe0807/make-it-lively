@@ -39,6 +39,15 @@ curl http://localhost:8000/health
 # {"status":"ok"}
 ```
 
+Image upload (PNG/JPG/WebP, ≤10MB):
+
+```bash
+curl -F "file=@./sample.png" http://localhost:8000/api/upload
+# {"image_id":"…","width":800,"height":600}
+```
+
+Uploaded files are written to `backend/storage/images/{image_id}.{ext}` (gitignored).
+
 ## Quality checks
 
 ```bash

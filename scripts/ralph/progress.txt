@@ -9,6 +9,10 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - FastAPI app lives at `backend/app/main.py` and is served via `uvicorn app.main:app --reload`.
 - CORS is pinned to `http://localhost:5173` for the Vite frontend.
 - Tests use `fastapi.testclient.TestClient`; place them in `backend/tests/` with `__init__.py`.
+- HTTP endpoints live under `backend/app/routers/<name>.py` and are attached to `app` in `main.py` via `app.include_router(...)`. Use `APIRouter(prefix="/api", tags=[...])` for all feature endpoints.
+- Use `Annotated[UploadFile, File(...)]` style for FastAPI dependencies — avoids ruff B008 while staying mypy-clean.
+- Filesystem paths for derived assets live in `backend/app/storage.py` (`IMAGES_DIR`, etc.). Import the module (not the constant) so tests can `monkeypatch.setattr(storage, "IMAGES_DIR", tmp_path)`.
+- `backend/storage/` is gitignored; create subdirs with `mkdir(parents=True, exist_ok=True)` on first write.
 
 ---
 
@@ -28,4 +32,26 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - TestClient in FastAPI 0.136 / Starlette 1.0 returns 200 (not 204) on OPTIONS preflight when CORS is configured — assert 200.
   - `pyproject.toml` already enforces `pythonpath = ["."]` and `testpaths = ["tests"]`, so imports use `from app.main import app`.
   - mypy strict mode requires explicit return types even on trivial handlers (e.g. `-> dict[str, str]`).
+---
+
+## 2026-04-17 - US-002
+- Added `POST /api/upload` accepting multipart `file`; validates ≤10MB and PNG/JPEG/WebP via Pillow; stores to `backend/storage/images/{uuid}.{ext}`; returns `{image_id, width, height}` with 201.
+- Introduced `backend/app/routers/` package and `backend/app/storage.py` module for filesystem paths.
+- Added Pillow 12 as a runtime dependency.
+- pytest covers PNG/JPEG/WebP success, oversized (with patched `MAX_FILE_SIZE_BYTES`), invalid bytes, and unsupported GIF.
+- Updated `backend/README.md` with a curl example.
+- Files changed:
+  - backend/pyproject.toml, backend/uv.lock
+  - backend/app/main.py (include router)
+  - backend/app/routers/__init__.py (new)
+  - backend/app/routers/upload.py (new)
+  - backend/app/storage.py (new)
+  - backend/tests/test_upload.py (new)
+  - backend/README.md
+- **Learnings for future iterations:**
+  - Prefer `Annotated[UploadFile, File(...)]` over bare `File(...)` defaults — keeps ruff's B008 quiet while mypy stays happy.
+  - Pillow 12 ships `py.typed`; no stub package needed for strict mypy.
+  - Test images should be generated on-the-fly with `PIL.Image.new(...).save(buf, format=...)` — avoids fixture files and keeps the repo clean.
+  - To test oversized rejection without big payloads, `monkeypatch.setattr(upload, "MAX_FILE_SIZE_BYTES", small)` and send a modestly larger payload.
+  - Import the `storage` module (not the constant directly) so tests can monkeypatch `storage.IMAGES_DIR` per-test via `tmp_path`.
 ---
