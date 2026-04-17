@@ -72,6 +72,19 @@ curl -X POST http://localhost:8000/api/segment \
 Transparent layers are written to `backend/storage/layers/{image_id}/{element_id}.png` and
 served read-only at `/storage/layers/...`.
 
+Background inpainting (requires `REPLICATE_API_TOKEN`):
+
+```bash
+curl -X POST http://localhost:8000/api/inpaint \
+  -H "Content-Type: application/json" \
+  -d '{"image_id":"…","masks":[{"bbox":[10,20,30,40]}]}'
+# {"image_id":"…","background_url":"/storage/layers/…/background.png"}
+```
+
+The filled background is written to
+`backend/storage/layers/{image_id}/background.png`. Empty `masks` short-circuits
+the Replicate call and copies the original image through.
+
 ## Quality checks
 
 ```bash

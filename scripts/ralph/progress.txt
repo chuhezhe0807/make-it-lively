@@ -103,3 +103,21 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - When the Replicate output shape is unknown, the safest quick-normalize order is: unwrap 1-element list → check `.read()` duck-typing → check `bytes`/`str` → else 502. Avoids false positives on strings (which also expose `.read` via wrappers? — they don't, but we check `.read` first anyway since it's unambiguous on FileOutput).
   - bbox format across endpoints is `[x, y, w, h]` (top-left origin). Centre point is `(x + w/2, y + h/2)`; keep this consistent with the perception tool schema so downstream consumers don't drift.
 ---
+
+## 2026-04-17 - US-005
+- Added `POST /api/inpaint` that accepts `{image_id, masks: [{bbox}]}`, rasterizes a combined binary mask from the bboxes, calls Replicate `stability-ai/stable-diffusion-inpainting`, and writes the filled output to `backend/storage/layers/{image_id}/background.png`.
+- Reused the segment pattern: `get_replicate_client()` factory, `_coerce_image_bytes` helper (bytes / URL str / file-like / 1-elem list), 404 on missing image, 502 on unexpected Replicate output shape.
+- Empty `masks` short-circuits: no Replicate call, original image is written through as `background.png` so downstream pipeline stages always find the file.
+- Mounts / routing already in place from US-004 (`/storage/layers` StaticFiles) — no changes required.
+- Tests cover: success + correct data-URI inputs to Replicate, file-like output, missing image 404, unexpected output 502, empty masks copies original.
+- Files changed:
+  - backend/app/main.py (include inpaint router)
+  - backend/app/routers/inpaint.py (new)
+  - backend/tests/test_inpaint.py (new)
+  - backend/README.md (document endpoint)
+- **Learnings for future iterations:**
+  - `PIL.ImageDraw.Draw(mask).rectangle((x, y, x+w, y+h), fill=255)` is the lightest way to rasterize a union-of-bboxes mask; pass a tuple, not a list — Pillow 12's `ImageDraw.rectangle` has overloads that prefer tuples.
+  - When the model may return a different canvas size than the original, resize back with `Image.Resampling.LANCZOS` before writing — keeps the background layer pixel-aligned with the element layers from US-004.
+  - For endpoints that share the Replicate output-coercion logic, keep the helper local to each router (`_coerce_image_bytes` vs `_coerce_mask_bytes`) — they differ in the final conversion (raw bytes vs alpha application), and premature extraction would complicate strict-mypy unions.
+  - `if not request.masks:` short-circuit is cheap insurance against a downstream pipeline that may call /api/inpaint even when /api/perception returned zero elements — keeps the contract "background.png always exists after this call".
+---
