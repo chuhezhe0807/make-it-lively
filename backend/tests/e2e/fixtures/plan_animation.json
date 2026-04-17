@@ -1,0 +1,24 @@
+{
+  "plan": [
+    {
+      "element_id": "cat",
+      "timeline": [
+        {"type": "translate", "dx": 40.0, "dy": 0.0},
+        {"type": "rotate", "angle": 15.0}
+      ],
+      "easing": "power1.inOut",
+      "loop": true,
+      "duration_ms": 1500
+    },
+    {
+      "element_id": "ball",
+      "timeline": [
+        {"type": "path-follow", "path": [[0.0, 0.0], [30.0, -40.0], [60.0, 0.0]]},
+        {"type": "scale", "scale": 1.2}
+      ],
+      "easing": "sine.inOut",
+      "loop": false,
+      "duration_ms": 900
+    }
+  ]
+}

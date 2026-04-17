@@ -1,0 +1,16 @@
+{
+  "elements": [
+    {
+      "id": "cat",
+      "label": "Orange cat",
+      "bbox": [8.0, 12.0, 48.0, 40.0],
+      "z_order": 2
+    },
+    {
+      "id": "ball",
+      "label": "Red ball",
+      "bbox": [70.0, 80.0, 20.0, 20.0],
+      "z_order": 1
+    }
+  ]
+}

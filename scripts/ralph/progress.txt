@@ -4,6 +4,8 @@ Started: Fri Apr 17 14:53:15 CST 2026
 
 ## Codebase Patterns
 - Backend uses `uv` for dependency management; install with `uv sync --extra dev`.
+- Integration/e2e tests live at `backend/tests/e2e/` (package with `__init__.py`); snapshot fixtures in `backend/tests/e2e/fixtures/`. Reuse the existing stub classes pattern (`_StubAnthropic`, `_StubReplicate`) rather than importing mocks — the pattern is already mypy-clean.
+- `json.loads(...)` is typed as `Any` under strict mypy; wrap with `cast(dict[str, Any], ...)` when loading snapshot fixtures to avoid `no-any-return`.
 - Backend quality gates: `uv run ruff check .`, `uv run mypy`, `uv run pytest` (run from `backend/`).
 - mypy is configured with `strict = true` and `files = ["app", "tests"]`; every new function needs type annotations.
 - FastAPI app lives at `backend/app/main.py` and is served via `uvicorn app.main:app --reload`.
@@ -312,4 +314,23 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - `img.crossOrigin = 'anonymous'` must be set BEFORE `img.src = …` — setting it after assigning src is silently ignored and the canvas ends up tainted on `getImageData`.
   - Wrap the per-frame work with `await new Promise<void>(r => setTimeout(r, 0))` so the UI progress bar actually re-renders between frames instead of blocking the event loop for the full render.
   - Always return the timeline to a known state in a `finally` (`pause(0)`) — otherwise an export that throws mid-loop leaves layers stuck at a weird time offset.
+---
+
+## 2026-04-17 - US-013
+- Added `backend/tests/e2e/` package with `test_pipeline.py` exercising upload → perception → segment → inpaint → plan-animation end-to-end through the FastAPI TestClient. Anthropic + Replicate calls are stubbed via the existing `get_anthropic_client` / `get_replicate_client` monkeypatch pattern; responses come from checked-in snapshot JSON files.
+- Snapshot fixtures: `backend/tests/e2e/fixtures/perception.json` (2 elements: cat + ball) and `plan_animation.json` (5-primitive sampling across both elements). The reference image is a deterministic 128×128 PNG produced by `_reference_image_bytes()` so it can be regenerated on demand for the manual smoke check.
+- Wrote `backend/tests/e2e/smoke.md` — live-API manual checklist covering all five endpoints + the frontend flow (including the US-012 GIF export).
+- Quality gates: `uv run ruff check .` ✔, `uv run mypy` ✔ (21 source files), `uv run pytest` ✔ (28 tests total, incl. 1 new e2e).
+- Files changed:
+  - backend/tests/e2e/__init__.py (new)
+  - backend/tests/e2e/test_pipeline.py (new)
+  - backend/tests/e2e/smoke.md (new)
+  - backend/tests/e2e/fixtures/__init__.py (new)
+  - backend/tests/e2e/fixtures/perception.json (new)
+  - backend/tests/e2e/fixtures/plan_animation.json (new)
+- **Learnings for future iterations:**
+  - `json.loads(...)` returns `Any` under mypy strict — wrap with `cast(dict[str, Any], ...)` when a snapshot loader is typed as `dict[str, Any]`, otherwise mypy flags `no-any-return`.
+  - The stubbed-client pattern already used by `test_perception.py` / `test_segment.py` composes cleanly across an e2e test: one `monkeypatch.setattr` per stage right before each POST keeps the test linear and easy to read. No global fixtures needed beyond the `isolated_storage` tmp_path monkeypatcher for `IMAGES_DIR`, `LAYERS_DIR`, `PERCEPTION_DIR`.
+  - A full-opacity solid mask (PIL `L`-mode all-255) is the simplest shape for segment stubs — the router applies `putalpha(mask)` so the output layer is just a copy of the original in RGBA without any transparency-related edge-case surprises, which keeps the e2e test's assertions focused on file presence + router plumbing rather than image contents.
+  - For the live-API smoke doc, surface the deterministic reference image through the helper in the pytest module (`_reference_image_bytes`) rather than checking in a binary PNG — one source of truth for the reference image, and the smoke checklist stays reproducible.
 ---
