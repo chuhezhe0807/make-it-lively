@@ -25,6 +25,9 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - Routes are registered in `frontend/src/router/index.ts`; add views to `frontend/src/views/` and export the router via `export const router`. `App.vue` renders `<RouterView />` only.
 - For upload progress, use `XMLHttpRequest` with `xhr.upload.onprogress` — `fetch()` cannot report upload progress in the browser. Keep the XHR helper in `frontend/src/lib/api.ts` and expose `{ onProgress, signal }` options.
 - Client-side validation must mirror backend rules (PNG/JPEG/WebP, ≤10MB) — surface errors via `ApiError.body.detail` when the server rejects, else a generic network-error fallback.
+- Pipeline orchestration pattern: represent each step as `{key, label, status, error}`; when retrying a step, reset it and all downstream steps to `pending` before re-running, so a failure mid-pipeline never leaves stale success state.
+- Typed API wrappers for each endpoint live alongside `uploadImage` in `frontend/src/lib/api.ts`. `postJson` takes `JsonValue`, so richer TS types (e.g. `Element[]`) need `as unknown as JsonValue` at the call site — keep the cast at the wrapper boundary, not inside UI code.
+- Server layer URLs are root-relative (`/storage/layers/...`); prefix with `API_BASE_URL` in the frontend so they resolve to the backend origin, not the Vite dev server.
 
 ---
 
@@ -196,4 +199,23 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - `@keydown.enter.prevent` / `@keydown.space.prevent` on a `role="button"` div keeps the dropzone keyboard-accessible; the hidden `<input type="file">` is clicked programmatically via a `ref`.
   - Use `router.push({ name, params })` (not a hand-built path string) so route param changes stay type-safe and survive route-path refactors.
   - Reset the native file input (`target.value = ''`) after reading `files[0]` so re-selecting the same file fires `change` again.
+---
+
+## 2026-04-17 - US-009
+- Built the Editor view (`frontend/src/views/Editor.vue`) with a three-step pipeline (perception → segment → inpaint) that auto-runs on mount, left-panel element list with per-step cards, and a center canvas with bbox outlines.
+- Added typed API wrappers (`perceiveElements`, `segmentElements`, `inpaintBackground`) plus `Element`/`Layer`/`PerceptionResponse`/`SegmentResponse`/`InpaintResponse` interfaces to `frontend/src/lib/api.ts`.
+- Each step has status pending/running/success/error; errors render an inline message + Retry button that resets the step and all downstream steps before re-running.
+- Element list shows label + segmented layer thumbnail (served via `/storage/layers/{imageId}/{elementId}.png`); clicking an element toggles a selected state that swaps its SVG outline to a solid indigo stroke.
+- Canvas viewBox is driven by intrinsic dimensions from the first segmented layer (or background.png after inpaint); falls back to max bbox extent so outlines are still meaningful pre-segment.
+- Quality gates: `npm run build` (vue-tsc -b + vite build) passes clean.
+- Browser verification: no MCP browser tool is configured; manual verification recommended — start backend (`uv run uvicorn app.main:app --reload`) + frontend (`npm run dev`), upload an image, and confirm: pipeline steps run sequentially; skeletons animate; element thumbnails load after segment; clicking a list item highlights its bbox; toggling env (kill backend during a step) shows the inline retry and resuming succeeds.
+- Files changed:
+  - frontend/src/views/Editor.vue (full rewrite)
+  - frontend/src/lib/api.ts (typed endpoint wrappers)
+- **Learnings for future iterations:**
+  - Intrinsic image dimensions can be recovered on the client with `new Image(); img.onload = () => img.naturalWidth/Height` — no need to add a backend `/api/image/{id}/info` endpoint just for dimensions. First segmented layer is same-size as the original (Pillow's `putalpha` preserves size).
+  - Pipeline orchestration is cleaner as `for (const key of order.slice(order.indexOf(startKey))) { ... }` than separate retry functions — retry becomes "run from this key", and downstream state resets happen in one shared helper.
+  - `postJson`'s `JsonValue` contract forces `as unknown as JsonValue` when passing typed arrays — confine the cast to the endpoint wrapper so call sites stay strict.
+  - `grid-cols-[280px_1fr]` in Tailwind v4 (arbitrary value grid) gives a sidebar + canvas layout without a dedicated class. The `min-h-[calc(100vh-65px)]` keeps the body below the 65-px header filling the viewport.
+  - When you have a step-based UI with a running/pending/success/error enum, expose `data-status` attributes on each card — makes it trivial to assert from Vitest or Playwright later without coupling to class names.
 ---

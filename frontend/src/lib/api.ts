@@ -54,6 +54,54 @@ export interface UploadOptions {
   signal?: AbortSignal
 }
 
+export interface Element {
+  id: string
+  label: string
+  bbox: [number, number, number, number]
+  z_order: number
+}
+
+export interface PerceptionResponse {
+  image_id: string
+  elements: Element[]
+}
+
+export interface Layer {
+  element_id: string
+  url: string
+}
+
+export interface SegmentResponse {
+  image_id: string
+  layers: Layer[]
+}
+
+export interface InpaintResponse {
+  image_id: string
+  background_url: string
+}
+
+export const perceiveElements = (imageId: string): Promise<PerceptionResponse> =>
+  api.postJson<PerceptionResponse>('/api/perception', { image_id: imageId })
+
+export const segmentElements = (
+  imageId: string,
+  elements: Element[],
+): Promise<SegmentResponse> =>
+  api.postJson<SegmentResponse>('/api/segment', {
+    image_id: imageId,
+    elements: elements as unknown as JsonValue,
+  })
+
+export const inpaintBackground = (
+  imageId: string,
+  masks: Array<{ bbox: [number, number, number, number] }>,
+): Promise<InpaintResponse> =>
+  api.postJson<InpaintResponse>('/api/inpaint', {
+    image_id: imageId,
+    masks: masks as unknown as JsonValue,
+  })
+
 export const uploadImage = (
   file: File,
   options: UploadOptions = {},
