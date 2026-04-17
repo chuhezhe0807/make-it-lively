@@ -23,6 +23,8 @@ Started: Fri Apr 17 14:53:15 CST 2026
 - `tsconfig.app.json` sets `erasableSyntaxOnly: true` — this rejects TypeScript parameter properties (`constructor(public foo: T)`) and enums. Declare fields explicitly and assign in the constructor body instead.
 - API base URL lives in `frontend/src/lib/api.ts` (`API_BASE_URL`, defaulting to `http://localhost:8000`, overridable via `VITE_API_BASE_URL`). All HTTP calls should go through the `api` helpers or typed wrappers in that file.
 - Routes are registered in `frontend/src/router/index.ts`; add views to `frontend/src/views/` and export the router via `export const router`. `App.vue` renders `<RouterView />` only.
+- For upload progress, use `XMLHttpRequest` with `xhr.upload.onprogress` — `fetch()` cannot report upload progress in the browser. Keep the XHR helper in `frontend/src/lib/api.ts` and expose `{ onProgress, signal }` options.
+- Client-side validation must mirror backend rules (PNG/JPEG/WebP, ≤10MB) — surface errors via `ApiError.body.detail` when the server rejects, else a generic network-error fallback.
 
 ---
 
@@ -177,4 +179,21 @@ Started: Fri Apr 17 14:53:15 CST 2026
   - `strictPort: true` in `vite.config.ts` is important because the backend's CORS allowlist is pinned to `http://localhost:5173`; without it, Vite silently falls back to 5174 if 5173 is busy and API calls fail with opaque CORS errors.
   - `vue-tsc -b` is cacheable; if a typecheck run appears to produce no output, `--force` (or deleting `node_modules/.tmp/*.tsbuildinfo`) confirms whether it actually ran.
   - For SPA routes that take a param (`/editor/:imageId`), set `props: true` on the route record so the component can `defineProps<{ imageId: string }>()` instead of reaching into `useRoute()`.
+---
+
+## 2026-04-17 - US-008
+- Built drag-and-drop upload page in `frontend/src/views/Home.vue`: dropzone accepts click + drag, validates PNG/JPEG/WebP and 10MB on the client, displays a progress bar during upload, shows server/network errors, and `router.push({ name: 'editor', params: { imageId } })` on success.
+- Extended `uploadImage` in `frontend/src/lib/api.ts` to use `XMLHttpRequest` so `xhr.upload.onprogress` can report fractional progress; accepts an `AbortSignal` for future cancellation.
+- Reused existing `ApiError` to pull backend `{detail}` strings for user-facing messages; maps `status === 0` to a network-error message.
+- Quality gates: `npm run build` (vue-tsc -b + vite build) green; dev server returns 200 on `/` with the updated page.
+- Browser verification: headless curl-only — no MCP browser tool available. Manual verification recommended: `npm run dev`, drag an image onto the dropzone, confirm progress bar, confirm navigation to `/editor/:imageId`, and confirm oversized / wrong-format / backend-down error states.
+- Files changed:
+  - frontend/src/views/Home.vue (rewrite)
+  - frontend/src/lib/api.ts (XHR-based uploadImage with progress + abort)
+- **Learnings for future iterations:**
+  - `fetch()` exposes `Response.body` as a readable stream but does NOT expose upload progress in the browser — use `XMLHttpRequest` with `xhr.upload.onprogress` whenever a multipart upload needs a progress bar.
+  - When swapping to XHR, keep the JSON-parsing fallback: if `responseText` is empty, body is `null`; if JSON.parse throws, fall back to the raw text so `ApiError.body` remains useful.
+  - `@keydown.enter.prevent` / `@keydown.space.prevent` on a `role="button"` div keeps the dropzone keyboard-accessible; the hidden `<input type="file">` is clicked programmatically via a `ref`.
+  - Use `router.push({ name, params })` (not a hand-built path string) so route param changes stay type-safe and survive route-path refactors.
+  - Reset the native file input (`target.value = ''`) after reading `files[0]` so re-selecting the same file fires `change` again.
 ---

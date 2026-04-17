@@ -49,8 +49,64 @@ export interface UploadResponse {
   height: number
 }
 
-export const uploadImage = (file: File): Promise<UploadResponse> => {
+export interface UploadOptions {
+  onProgress?: (fraction: number) => void
+  signal?: AbortSignal
+}
+
+export const uploadImage = (
+  file: File,
+  options: UploadOptions = {},
+): Promise<UploadResponse> => {
   const form = new FormData()
   form.append('file', file)
-  return api.postForm<UploadResponse>('/api/upload', form)
+
+  return new Promise<UploadResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE_URL}/api/upload`)
+
+    if (options.onProgress) {
+      const onProgress = options.onProgress
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(event.loaded / event.total)
+        }
+      }
+    }
+
+    xhr.onload = () => {
+      const text = xhr.responseText
+      let body: unknown = null
+      if (text) {
+        try {
+          body = JSON.parse(text) as unknown
+        } catch {
+          body = text
+        }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as UploadResponse)
+      } else {
+        reject(new ApiError(xhr.status, xhr.statusText, body))
+      }
+    }
+
+    xhr.onerror = () => {
+      reject(new ApiError(0, 'Network Error', null))
+    }
+
+    xhr.onabort = () => {
+      reject(new ApiError(0, 'Aborted', null))
+    }
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        xhr.abort()
+        return
+      }
+      options.signal.addEventListener('abort', () => xhr.abort(), { once: true })
+    }
+
+    xhr.send(form)
+  })
 }
