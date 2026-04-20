@@ -84,6 +84,82 @@ describe('buildTimeline — rotate primitive', () => {
   })
 })
 
+describe('buildTimeline — pivot / transformOrigin', () => {
+  // Shared image dimensions: picked so the arithmetic below is exact.
+  const imageWidth = 400
+  const imageHeight = 200
+
+  test('rotate with pivot emits transformOrigin as image-space %', () => {
+    // pivot at (100, 50) with a 400×200 image -> 25% 25%
+    const tl = buildTimeline(
+      [
+        elementAnimation({
+          type: 'rotate',
+          angle: 45,
+          pivot: [100, 50],
+        }),
+      ],
+      { el: makeTarget() },
+      { imageWidth, imageHeight },
+    )
+    const tween = getFirstTween(tl)
+    expect(tween.vars.rotation).toBe(45)
+    expect(tween.vars.transformOrigin).toBe('25% 25%')
+  })
+
+  test('rotate WITHOUT pivot leaves transformOrigin undefined', () => {
+    const tl = buildTimeline(
+      [elementAnimation({ type: 'rotate', angle: 10 })],
+      { el: makeTarget() },
+      { imageWidth, imageHeight },
+    )
+    const tween = getFirstTween(tl)
+    expect(tween.vars.transformOrigin).toBeUndefined()
+  })
+
+  test('pivot without image dims is ignored (graceful fallback)', () => {
+    // No imageWidth/imageHeight in options — the animator can't compute a
+    // percentage, so it should drop the pivot silently rather than
+    // guessing. This matters when canvas dims haven't loaded yet.
+    const tl = buildTimeline(
+      [elementAnimation({ type: 'rotate', angle: 10, pivot: [100, 50] })],
+      { el: makeTarget() },
+    )
+    const tween = getFirstTween(tl)
+    expect(tween.vars.transformOrigin).toBeUndefined()
+  })
+
+  test('scale with pivot emits transformOrigin too', () => {
+    const tl = buildTimeline(
+      [elementAnimation({ type: 'scale', scale: 1.2, pivot: [200, 100] })],
+      { el: makeTarget() },
+      { imageWidth, imageHeight },
+    )
+    const tween = getFirstTween(tl)
+    expect(tween.vars.scale).toBe(1.2)
+    expect(tween.vars.transformOrigin).toBe('50% 50%')
+  })
+
+  test('translate with pivot does NOT set transformOrigin', () => {
+    // Pivot is meaningless for a pure translate; the animator should not
+    // accidentally leak it into the tween vars.
+    const tl = buildTimeline(
+      [
+        elementAnimation({
+          type: 'translate',
+          dx: 50,
+          dy: 0,
+          pivot: [100, 50],
+        }),
+      ],
+      { el: makeTarget() },
+      { imageWidth, imageHeight },
+    )
+    const tween = getFirstTween(tl)
+    expect(tween.vars.transformOrigin).toBeUndefined()
+  })
+})
+
 describe('buildTimeline — scale primitive', () => {
   test('scale emits scale tween', () => {
     const tl = buildTimeline(

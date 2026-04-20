@@ -181,6 +181,65 @@ def test_plan_animation_rejects_invalid_primitive(monkeypatch: pytest.MonkeyPatc
     assert "invalid DSL" in response.json()["detail"]
 
 
+def test_plan_animation_preserves_pivot_on_rotate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rotate step pivots must round-trip; parent_id/pivot in ElementInput
+    also reach the planner's user message."""
+    elements_with_child = [
+        {
+            "id": "blue_robot",
+            "label": "Blue robot",
+            "bbox": [100.0, 50.0, 200.0, 300.0],
+            "z_order": 2,
+        },
+        {
+            "id": "blue_robot.right_arm",
+            "label": "Right arm",
+            "bbox": [260.0, 120.0, 60.0, 120.0],
+            "z_order": 3,
+            "parent_id": "blue_robot",
+            "pivot": [270.0, 130.0],
+        },
+    ]
+    payload = {
+        "plan": [
+            {
+                "element_id": "blue_robot.right_arm",
+                "timeline": [
+                    {
+                        "type": "rotate",
+                        "angle": -25.0,
+                        "pivot": [270.0, 130.0],
+                        "duration_ms": 400,
+                        "easing": "sine.inOut",
+                    }
+                ],
+                "easing": "sine.inOut",
+                "loop": True,
+                "duration_ms": 800,
+            }
+        ]
+    }
+    stub_client = _StubClient(_StubMessage([_StubToolUseBlock(payload)]))
+    monkeypatch.setattr(plan_animation, "get_anthropic_client", lambda: stub_client)
+
+    response = _post(elements_with_child, prompt="wave the robot's right arm")
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan[0]["element_id"] == "blue_robot.right_arm"
+    assert plan[0]["timeline"][0]["pivot"] == [270.0, 130.0]
+
+    # Planner prompt must mention parent_id + pivot so Claude can reason over them.
+    call = stub_client.messages.calls[0]
+    user_text = "".join(
+        block["text"] for block in call["messages"][0]["content"] if block["type"] == "text"
+    )
+    assert "parent_id: 'blue_robot'" in user_text
+    assert "pivot: [270.0, 130.0]" in user_text
+
+
 def test_plan_animation_requires_elements() -> None:
     response = client.post(
         "/api/plan-animation",

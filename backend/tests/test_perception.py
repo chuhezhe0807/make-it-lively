@@ -133,6 +133,53 @@ def test_perception_missing_image_returns_404(
     assert len(stub_client.messages.calls) == 0
 
 
+def test_perception_preserves_parent_id_and_pivot(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Articulated sub-parts must round-trip parent_id + pivot to the cache."""
+    image_id = "articulated"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png")
+
+    # Payload shaped like a robot decomposition: whole object + one arm child.
+    payload = {
+        "elements": [
+            {
+                "id": "blue_robot",
+                "label": "Blue robot",
+                "bbox": [100.0, 50.0, 200.0, 300.0],
+                "z_order": 2,
+            },
+            {
+                "id": "blue_robot.right_arm",
+                "label": "Right arm",
+                "bbox": [260.0, 120.0, 60.0, 120.0],
+                "z_order": 3,
+                "parent_id": "blue_robot",
+                "pivot": [270.0, 130.0],
+            },
+        ]
+    }
+    stub_client = _StubClient(_StubMessage([_StubToolUseBlock(payload)]))
+    monkeypatch.setattr(perception, "get_anthropic_client", lambda: stub_client)
+
+    response = client.post("/api/perception", json={"image_id": image_id})
+
+    assert response.status_code == 200
+    body = response.json()
+    # Parent stays atomic — no extra fields populated.
+    assert body["elements"][0]["parent_id"] is None
+    assert body["elements"][0]["pivot"] is None
+    # Child carries through both fields.
+    child = body["elements"][1]
+    assert child["parent_id"] == "blue_robot"
+    assert child["pivot"] == [270.0, 130.0]
+
+    # Cache persists the new fields too.
+    cached = json.loads((storage.PERCEPTION_DIR / f"{image_id}.json").read_text())
+    assert cached["elements"][1]["parent_id"] == "blue_robot"
+    assert cached["elements"][1]["pivot"] == [270.0, 130.0]
+
+
 def test_perception_rejects_unstructured_response(
     isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

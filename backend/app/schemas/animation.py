@@ -40,6 +40,12 @@ class AnimationPrimitive(BaseModel):
     path: list[list[float]] | None = None
     duration_ms: int | None = Field(default=None, ge=0)
     easing: str | None = None
+    # Optional [x, y] pixel-coord pivot in source-image space. Used by the
+    # frontend animator to set CSS transform-origin on rotate/scale steps so
+    # e.g. an arm rotates around its shoulder. Ignored for translate /
+    # opacity / path-follow. `None` falls back to the layer's geometric
+    # centre (pre-M1.5 behaviour).
+    pivot: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
 class ElementAnimation(BaseModel):

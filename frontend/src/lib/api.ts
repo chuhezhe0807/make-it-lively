@@ -61,6 +61,11 @@ export interface Element {
   label: string
   bbox: [number, number, number, number]
   z_order: number
+  // Optional articulated-hierarchy fields — set by the VLM when it
+  // decomposes an object (e.g. robot) into movable sub-parts.
+  parent_id?: string | null
+  // [x, y] pixel coords (image-space) — natural rotation / scale anchor.
+  pivot?: [number, number] | null
 }
 
 export interface PerceptionResponse {

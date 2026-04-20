@@ -49,6 +49,12 @@ const exportProgress = ref(0)
 const exportError = ref<string | null>(null)
 let currentTimeline: gsap.core.Timeline | null = null
 
+// Element ids to hide on the canvas while an animation is active. Populated
+// whenever a plan references a child element — we hide that child's parent
+// so the user doesn't see the arm in two places at once (static parent +
+// moving child).
+const hiddenParentIds = ref<string[]>([])
+
 const layerByElement = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
   for (const layer of layers.value) {
@@ -202,6 +208,28 @@ function disposeTimeline(): void {
   }
   hasTimeline.value = false
   isPlaying.value = false
+  // Re-show any parents we'd hidden during playback so the canvas returns
+  // to its pre-animation appearance.
+  hiddenParentIds.value = []
+}
+
+/**
+ * Compute which parent elements should be hidden while `plan` is playing.
+ *
+ * Rule: if the plan animates a child element (has a parent_id), hide that
+ * parent so the child's motion doesn't ghost against a static copy.
+ * Non-animated siblings stay visible — they cover the rest of the parent's
+ * silhouette as long as the VLM's decomposition tiles it reasonably.
+ */
+function computeHiddenParents(plan: AnimationDSL): string[] {
+  const animatedIds = new Set(plan.map((ea) => ea.element_id))
+  const parents = new Set<string>()
+  for (const el of elements.value) {
+    if (el.parent_id && animatedIds.has(el.id)) {
+      parents.add(el.parent_id)
+    }
+  }
+  return [...parents]
 }
 
 function resetLayerTransforms(): void {
@@ -234,12 +262,22 @@ async function onMakeLively(): Promise<void> {
     }
     disposeTimeline()
     resetLayerTransforms()
-    const timeline = buildTimeline(usable, refs, { paused: true })
+    // Pass intrinsic image dims so pivots (image-space px) can be mapped
+    // to CSS transform-origin percentages. When dims are not yet loaded
+    // (canvasDims still null) the animator silently falls back to
+    // centre-based rotation, which matches pre-M1.5 behaviour.
+    const timeline = buildTimeline(usable, refs, {
+      paused: true,
+      imageWidth: canvasDims.value?.width,
+      imageHeight: canvasDims.value?.height,
+    })
     timeline.eventCallback('onComplete', () => {
       isPlaying.value = false
     })
     currentTimeline = timeline
     hasTimeline.value = true
+    // Hide parents of any animated child so the motion doesn't ghost.
+    hiddenParentIds.value = computeHiddenParents(usable)
     timeline.play()
     isPlaying.value = true
   } catch (err) {
@@ -392,7 +430,11 @@ onBeforeUnmount(() => {
           />
         </ul>
         <ul v-else class="space-y-2" data-testid="element-list">
-          <li v-for="el in elements" :key="el.id">
+          <li
+            v-for="el in elements"
+            :key="el.id"
+            :class="el.parent_id ? 'pl-4 border-l border-slate-800 ml-2' : ''"
+          >
             <button
               type="button"
               class="w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors"
@@ -433,6 +475,7 @@ onBeforeUnmount(() => {
           :background-url="backgroundUrl"
           :elements="elements"
           :layer-urls="layerByElement"
+          :hidden-element-ids="hiddenParentIds"
           data-testid="canvas"
         >
           <svg

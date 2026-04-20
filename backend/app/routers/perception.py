@@ -24,12 +24,31 @@ IMAGE_MEDIA_TYPES: Final[dict[str, str]] = {
 }
 
 PERCEPTION_PROMPT: Final[str] = (
+    # Core task: identify animatable foreground objects. Background is excluded
+    # because it is reconstructed separately by /api/inpaint.
     "Analyze this image and identify the distinct foreground elements that "
     "could be animated independently (e.g. characters, vehicles, objects). "
     "Exclude the background. For each element, return a stable snake_case id, "
     "a short human-readable label, an axis-aligned bounding box in pixel "
     "coordinates as [x, y, width, height] with origin at the top-left, and a "
-    "z_order where higher values render on top. Call the report_elements tool."
+    "z_order where higher values render on top.\n\n"
+    # Sub-part decomposition: only do this when the object has parts that
+    # would plausibly move independently — a robot's arms, a bird's wings,
+    # a character's head. Skip for rigid objects (balls, text, panels).
+    "If an element is articulated — meaning it has distinct parts that could "
+    "move independently (limbs, wings, wheels, doors, flames) — ALSO emit "
+    "one element per sub-part. Use dotted ids like 'blue_robot.right_arm' "
+    "and set `parent_id` to the parent's id. The set of children should "
+    "cover the parent's bbox as tightly as possible so that hiding the "
+    "parent during animation does not leave visible gaps.\n\n"
+    # Pivot: Claude is great at spatial reasoning, so we ask it to locate
+    # the natural rotation/scale anchor for each articulated sub-part.
+    "For each articulated sub-part (and for standalone articulated elements "
+    "like a pendulum), also return `pivot` as [x, y] pixel coordinates "
+    "pointing at the natural rotation anchor — shoulder for an arm, hip "
+    "for a leg, hinge for a door, base-center for a rocket flame. Omit "
+    "`pivot` when there is no clear anchor.\n\n"
+    "Call the report_elements tool."
 )
 
 PERCEPTION_TOOL: Final[dict[str, Any]] = {
@@ -52,6 +71,15 @@ PERCEPTION_TOOL: Final[dict[str, Any]] = {
                             "maxItems": 4,
                         },
                         "z_order": {"type": "integer"},
+                        # Optional — only populated for articulated sub-parts.
+                        "parent_id": {"type": ["string", "null"]},
+                        # Optional [x, y] pixel coords for the rotation anchor.
+                        "pivot": {
+                            "type": ["array", "null"],
+                            "items": {"type": "number"},
+                            "minItems": 2,
+                            "maxItems": 2,
+                        },
                     },
                     "required": ["id", "label", "bbox", "z_order"],
                 },
@@ -73,6 +101,14 @@ class Element(BaseModel):
     label: str
     bbox: list[float] = Field(..., min_length=4, max_length=4)
     z_order: int
+    # Optional parent id: set on articulated sub-parts so the frontend can
+    # group children under their parent and hide the parent during animation
+    # to avoid moving-arm-plus-static-arm ghosting.
+    parent_id: str | None = None
+    # Optional [x, y] pixel coords in image space — the natural rotation /
+    # scale anchor for this element. The frontend converts to CSS
+    # transform-origin as a percentage of the layer's intrinsic dimensions.
+    pivot: list[float] | None = Field(default=None, min_length=2, max_length=2)
 
 
 class PerceptionResponse(BaseModel):

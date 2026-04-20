@@ -17,6 +17,10 @@ export interface AnimationPrimitive {
   path?: Array<[number, number]> | null
   duration_ms?: number | null
   easing?: string | null
+  // Per-step pivot in image-space pixel coords. Converted to CSS
+  // transform-origin on rotate / scale steps. Null => rotate/scale around
+  // the layer's geometric centre (pre-M1.5 behaviour).
+  pivot?: [number, number] | null
 }
 
 export interface ElementAnimation {
@@ -69,12 +73,40 @@ function isPrimitiveType(value: string): value is PrimitiveType {
   return (PRIMITIVE_TYPES as readonly string[]).includes(value)
 }
 
+/**
+ * Convert a pivot in image-space pixel coordinates into a CSS / GSAP
+ * `transform-origin` string expressed as percentages of the image size.
+ *
+ * Why percentages: layer `<img>` elements are rendered with
+ * `object-fit: contain` inside a box whose aspect ratio matches the image,
+ * so the rendered pixel size depends on layout. Percentages track the
+ * image content correctly regardless of how the browser scales it.
+ *
+ * Returns `null` when the caller didn't supply a pivot or when image
+ * dimensions are missing — the caller should then omit `transformOrigin`
+ * so GSAP falls back to the default layer centre.
+ */
+function resolveTransformOrigin(
+  step: AnimationPrimitive,
+  imageWidth: number | undefined,
+  imageHeight: number | undefined,
+): string | null {
+  if (!step.pivot) return null
+  if (!imageWidth || !imageHeight) return null
+  const [px, py] = step.pivot
+  const xPct = (px / imageWidth) * 100
+  const yPct = (py / imageHeight) * 100
+  return `${xPct}% ${yPct}%`
+}
+
 function applyPrimitive(
   subTimeline: gsap.core.Timeline,
   target: AnimatorTarget,
   step: AnimationPrimitive,
   fallbackDurationSeconds: number,
   fallbackEase: string,
+  imageWidth: number | undefined,
+  imageHeight: number | undefined,
 ): void {
   if (!isPrimitiveType(step.type)) {
     throw new UnknownPrimitiveError(step.type as string)
@@ -83,6 +115,13 @@ function applyPrimitive(
   const durationSeconds =
     step.duration_ms != null ? step.duration_ms / 1000 : fallbackDurationSeconds
   const ease = step.easing ?? fallbackEase
+
+  // Pivots only make sense for rotate / scale; omit for translate /
+  // opacity / path-follow to keep GSAP's tween vars clean.
+  const pivotOrigin =
+    step.type === 'rotate' || step.type === 'scale'
+      ? resolveTransformOrigin(step, imageWidth, imageHeight)
+      : null
 
   switch (step.type) {
     case 'translate':
@@ -98,6 +137,9 @@ function applyPrimitive(
         rotation: step.angle ?? 0,
         duration: durationSeconds,
         ease,
+        // Only include transformOrigin when we actually resolved a pivot;
+        // otherwise GSAP keeps whatever origin was active (default 50% 50%).
+        ...(pivotOrigin != null ? { transformOrigin: pivotOrigin } : {}),
       })
       return
     case 'scale':
@@ -105,6 +147,7 @@ function applyPrimitive(
         scale: step.scale ?? 1,
         duration: durationSeconds,
         ease,
+        ...(pivotOrigin != null ? { transformOrigin: pivotOrigin } : {}),
       })
       return
     case 'opacity':
@@ -135,6 +178,12 @@ function applyPrimitive(
 
 export interface BuildTimelineOptions {
   paused?: boolean
+  // Source image intrinsic dimensions. Supplied so pivots expressed in
+  // image-space pixel coordinates can be mapped to percentage-based CSS
+  // transform-origin values. Optional: when omitted, any pivot on a step
+  // is ignored and rotation / scale falls back to the layer centre.
+  imageWidth?: number
+  imageHeight?: number
 }
 
 export function buildTimeline(
@@ -158,7 +207,15 @@ export function buildTimeline(
     const fallbackEase = elementAnimation.easing
 
     for (const step of elementAnimation.timeline) {
-      applyPrimitive(sub, target, step, fallbackDurationSeconds, fallbackEase)
+      applyPrimitive(
+        sub,
+        target,
+        step,
+        fallbackDurationSeconds,
+        fallbackEase,
+        options.imageWidth,
+        options.imageHeight,
+      )
     }
 
     root.add(sub, 0)
