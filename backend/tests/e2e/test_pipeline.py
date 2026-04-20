@@ -109,6 +109,11 @@ def isolated_storage(
     monkeypatch.setattr(storage, "IMAGES_DIR", images_dir)
     monkeypatch.setattr(storage, "LAYERS_DIR", layers_dir)
     monkeypatch.setattr(storage, "PERCEPTION_DIR", perception_dir)
+    # Force the Replicate code path regardless of the dev's .env so the
+    # mocked stubs below are actually hit. Fallback coverage lives in the
+    # per-router tests.
+    monkeypatch.setenv("REPLICATE_API_TOKEN", "test-replicate-token")
+    monkeypatch.delenv("USE_REPLICATE_FALLBACK", raising=False)
     return tmp_path
 
 

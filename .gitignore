@@ -1,0 +1,26 @@
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Upstream Ralph clone kept locally as reference only ---
+# Ralph's own files are copied into scripts/ralph/; the cloned repo itself
+# doesn't need to ship with this project.
+/ralph/
+
+# --- Ralph runtime state ---
+# `.last-branch` is rewritten on every ralph.sh invocation; keeping it out of
+# git avoids churn. `progress.txt` stays tracked — it holds codebase patterns
+# discovered by past iterations.
+scripts/ralph/.last-branch
+scripts/ralph/archive/
+
+# --- Node (in case someone runs npm outside frontend/) ---
+node_modules/
+
+# --- Python ---
+__pycache__/
+*.pyc
