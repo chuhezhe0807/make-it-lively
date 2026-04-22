@@ -12,6 +12,7 @@ import {
 } from '../lib/api'
 import { buildTimeline, type AnimationDSL } from '../lib/animator'
 import { downloadBlob, exportGif } from '../lib/gifExporter'
+import { exportVideo } from '../lib/videoExporter'
 import LayeredCanvas from '../components/LayeredCanvas.vue'
 
 const props = defineProps<{ imageId: string }>()
@@ -323,15 +324,33 @@ function onReset(): void {
   isPlaying.value = false
 }
 
-async function onExportGif(): Promise<void> {
-  if (!currentTimeline || !canvasDims.value || isExporting.value) return
+/** 收集导出所需的通用输入参数 */
+function getExportInput() {
+  if (!currentTimeline || !canvasDims.value) return null
   const refs = canvasRef.value?.getLayerRefs() ?? {}
   const sample = Object.values(refs).find(
     (el): el is HTMLImageElement => el instanceof HTMLImageElement,
   )
   const renderedWidth = sample?.clientWidth ?? canvasDims.value.width
   const renderedHeight = sample?.clientHeight ?? canvasDims.value.height
-  if (renderedWidth <= 0 || renderedHeight <= 0) {
+  if (renderedWidth <= 0 || renderedHeight <= 0) return null
+  return {
+    timeline: currentTimeline,
+    intrinsicWidth: canvasDims.value.width,
+    intrinsicHeight: canvasDims.value.height,
+    renderedWidth,
+    renderedHeight,
+    backgroundUrl: backgroundUrl.value,
+    elements: elements.value,
+    layerUrls: layerByElement.value,
+    layerRefs: refs,
+  }
+}
+
+async function onExportVideo(): Promise<void> {
+  if (isExporting.value) return
+  const input = getExportInput()
+  if (!input) {
     exportError.value = 'Canvas is not visible yet'
     return
   }
@@ -342,26 +361,42 @@ async function onExportGif(): Promise<void> {
   isPlaying.value = false
 
   try {
-    const blob = await exportGif(
-      {
-        timeline: currentTimeline,
-        intrinsicWidth: canvasDims.value.width,
-        intrinsicHeight: canvasDims.value.height,
-        renderedWidth,
-        renderedHeight,
-        backgroundUrl: backgroundUrl.value,
-        elements: elements.value,
-        layerUrls: layerByElement.value,
-        layerRefs: refs,
+    const blob = await exportVideo(input, {
+      fps: 30,
+      minDurationSeconds: 2,
+      onProgress: (fraction) => {
+        exportProgress.value = fraction
       },
-      {
-        fps: 15,
-        minDurationSeconds: 2,
-        onProgress: (fraction) => {
-          exportProgress.value = fraction
-        },
+    })
+    downloadBlob(blob, 'make-it-lively.mp4')
+  } catch (err) {
+    exportError.value = formatError(err)
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function onExportGif(): Promise<void> {
+  if (isExporting.value) return
+  const input = getExportInput()
+  if (!input) {
+    exportError.value = 'Canvas is not visible yet'
+    return
+  }
+
+  isExporting.value = true
+  exportProgress.value = 0
+  exportError.value = null
+  isPlaying.value = false
+
+  try {
+    const blob = await exportGif(input, {
+      fps: 15,
+      minDurationSeconds: 2,
+      onProgress: (fraction) => {
+        exportProgress.value = fraction
       },
-    )
+    })
     downloadBlob(blob, 'make-it-lively.gif')
   } catch (err) {
     exportError.value = formatError(err)
@@ -599,10 +634,19 @@ onBeforeUnmount(() => {
               type="button"
               class="rounded-md bg-emerald-500 hover:bg-emerald-400 text-white font-medium py-2 px-4 transition-colors disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed"
               :disabled="!hasTimeline || isExporting"
+              data-testid="export-video"
+              @click="onExportVideo"
+            >
+              {{ isExporting ? 'Exporting…' : 'Export Video' }}
+            </button>
+            <button
+              type="button"
+              class="rounded-md border border-slate-700 bg-slate-900/60 hover:bg-slate-800 text-slate-300 font-medium py-2 px-4 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!hasTimeline || isExporting"
               data-testid="export-gif"
               @click="onExportGif"
             >
-              {{ isExporting ? 'Exporting…' : 'Export GIF' }}
+              Export GIF
             </button>
             <div
               v-if="isExporting"

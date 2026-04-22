@@ -1,6 +1,14 @@
-import gsap from 'gsap'
 import { GIFEncoder, applyPalette, quantize } from 'gifenc'
 import type { Element as ApiElement } from './api'
+import { renderFrame, type FrameRenderContext } from './renderFrame'
+
+// GIF 不需要源图原始分辨率，长边限制到 800px 可大幅降低
+// getImageData / quantize / applyPalette / LZW 的开销
+const MAX_GIF_DIMENSION = 800
+
+// 相邻帧颜色差异很小，每隔 N 帧才重新做一次 NeuQuant 量化，
+// 中间帧复用已有 palette，省掉 ~30% 的量化开销
+const PALETTE_REUSE_INTERVAL = 15
 
 export interface ExportGifOptions {
   fps?: number
@@ -31,19 +39,19 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   })
 }
 
-function readNumericProp(target: Element, prop: string, fallback: number): number {
-  const value = gsap.getProperty(target, prop)
-  const num = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(num) ? num : fallback
-}
-
 export async function exportGif(
   input: ExportGifInput,
   options: ExportGifOptions = {},
 ): Promise<Blob> {
   const fps = options.fps ?? 15
   const minDuration = options.minDurationSeconds ?? 2
-  const timelineDuration = input.timeline.duration()
+  // root.duration() 会包含子 timeline 的 repeat，当 loop=true (repeat:-1)
+  // 时结果是 Infinity。改为取各子 timeline 单次循环 duration 的最大值。
+  const children = input.timeline.getChildren(false, false, true) as gsap.core.Timeline[]
+  const timelineDuration =
+    children.length > 0
+      ? Math.max(...children.map((c) => c.duration()))
+      : input.timeline.duration()
   const explicit = options.durationSeconds
   const duration =
     explicit != null && explicit > 0
@@ -60,8 +68,18 @@ export async function exportGif(
   if (renderedWidth <= 0 || renderedHeight <= 0) {
     throw new Error('Rendered canvas size must be positive')
   }
-  const scaleX = intrinsicWidth / renderedWidth
-  const scaleY = intrinsicHeight / renderedHeight
+
+  // 将 GIF 输出尺寸限制在 MAX_GIF_DIMENSION 以内，等比缩放
+  const downscale = Math.min(
+    1,
+    MAX_GIF_DIMENSION / Math.max(intrinsicWidth, intrinsicHeight),
+  )
+  const gifW = Math.round(intrinsicWidth * downscale)
+  const gifH = Math.round(intrinsicHeight * downscale)
+
+  // GSAP 动画偏移量是 CSS 像素空间，需要换算到 GIF canvas 空间
+  const scaleX = gifW / renderedWidth
+  const scaleY = gifH / renderedHeight
 
   const ordered = [...input.elements].sort((a, b) => a.z_order - b.z_order)
 
@@ -77,68 +95,41 @@ export async function exportGif(
   )
 
   const canvas = document.createElement('canvas')
-  canvas.width = intrinsicWidth
-  canvas.height = intrinsicHeight
-  const ctx = canvas.getContext('2d')
+  canvas.width = gifW
+  canvas.height = gifH
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) {
     throw new Error('Failed to get 2D context for GIF canvas')
   }
 
+  const rc: FrameRenderContext = {
+    ctx, canvasW: gifW, canvasH: gifH,
+    scaleX, scaleY, renderedWidth, renderedHeight,
+    bgImage, ordered, layerImages, layerRefs: input.layerRefs,
+  }
+
   const gif = GIFEncoder()
   input.timeline.pause()
+
+  // 缓存 palette 用于帧间复用
+  let cachedPalette: number[][] | null = null
 
   try {
     for (let i = 0; i < frameCount; i++) {
       const t = frameCount === 1 ? 0 : (i / frameCount) * duration
       input.timeline.pause(t)
 
-      ctx.clearRect(0, 0, intrinsicWidth, intrinsicHeight)
-      ctx.fillStyle = '#000000'
-      ctx.fillRect(0, 0, intrinsicWidth, intrinsicHeight)
+      renderFrame(rc)
+      const imageData = ctx.getImageData(0, 0, gifW, gifH)
 
-      if (bgImage) {
-        ctx.drawImage(bgImage, 0, 0, intrinsicWidth, intrinsicHeight)
+      // 每 PALETTE_REUSE_INTERVAL 帧重新量化一次，中间帧复用 palette
+      const needsNewPalette = i % PALETTE_REUSE_INTERVAL === 0 || cachedPalette === null
+      if (needsNewPalette) {
+        cachedPalette = quantize(imageData.data, 256, { format: 'rgb444' })
       }
-
-      for (const el of ordered) {
-        const img = layerImages[el.id]
-        if (!img) continue
-        const target = input.layerRefs[el.id]
-        let x = 0
-        let y = 0
-        let rotation = 0
-        let scaleVal = 1
-        let opacity = 1
-        if (target) {
-          x = readNumericProp(target, 'x', 0)
-          y = readNumericProp(target, 'y', 0)
-          rotation = readNumericProp(target, 'rotation', 0)
-          scaleVal = readNumericProp(target, 'scale', 1)
-          opacity = readNumericProp(target, 'opacity', 1)
-        }
-        ctx.save()
-        ctx.globalAlpha = Math.max(0, Math.min(1, opacity))
-        ctx.translate(
-          intrinsicWidth / 2 + x * scaleX,
-          intrinsicHeight / 2 + y * scaleY,
-        )
-        ctx.rotate((rotation * Math.PI) / 180)
-        ctx.scale(scaleVal, scaleVal)
-        ctx.drawImage(
-          img,
-          -intrinsicWidth / 2,
-          -intrinsicHeight / 2,
-          intrinsicWidth,
-          intrinsicHeight,
-        )
-        ctx.restore()
-      }
-
-      const imageData = ctx.getImageData(0, 0, intrinsicWidth, intrinsicHeight)
-      const palette = quantize(imageData.data, 256, { format: 'rgb444' })
-      const index = applyPalette(imageData.data, palette, 'rgb444')
-      gif.writeFrame(index, intrinsicWidth, intrinsicHeight, {
-        palette,
+      const index = applyPalette(imageData.data, cachedPalette!, 'rgb444')
+      gif.writeFrame(index, gifW, gifH, {
+        palette: cachedPalette!,
         delay: frameDelayMs,
         first: i === 0,
         repeat: 0,
@@ -148,6 +139,7 @@ export async function exportGif(
         options.onProgress((i + 1) / frameCount)
       }
 
+      // 让出主线程，避免 UI 完全冻结
       await new Promise<void>((resolve) => setTimeout(resolve, 0))
     }
   } finally {
@@ -155,10 +147,7 @@ export async function exportGif(
   }
 
   gif.finish()
-  const bytes = gif.bytes()
-  const buffer = new Uint8Array(bytes.length)
-  buffer.set(bytes)
-  return new Blob([buffer], { type: 'image/gif' })
+  return new Blob([gif.bytes().slice().buffer], { type: 'image/gif' })
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
