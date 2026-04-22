@@ -1,238 +1,101 @@
 {
   "project": "Make It Lively",
-  "branchName": "ralph/make-it-lively-mvp",
-  "description": "Agent app: upload an image, extract semantic elements as layers, and animate them from natural-language prompts. M1 MVP: Vite+Vue3 frontend, FastAPI backend, Claude VLM + Replicate SAM2 + GSAP.",
+  "branchName": "ralph/articulated-animation",
+  "description": "Improve perception and animation planning so that animals/characters are decomposed into articulated sub-parts (head, body, limbs, tail) and the planner generates rotate+pivot joint motion instead of whole-body translate bouncing.",
   "userStories": [
     {
-      "id": "US-001",
-      "title": "Scaffold FastAPI backend with health check",
-      "description": "As a developer, I need a FastAPI backend skeleton with health check so subsequent endpoints can be added.",
+      "id": "US-021",
+      "title": "Enhance VLM perception prompt for animal/character sub-part decomposition",
+      "description": "As the system, I need the perception prompt to aggressively decompose animals, characters, and creatures into sub-parts (head, body, limbs, tail) so that each limb can be animated independently.",
       "acceptanceCriteria": [
-        "backend/ contains FastAPI app and pyproject.toml (uv or poetry)",
-        "/health returns {\"status\": \"ok\"}",
-        "uvicorn app.main:app --reload starts successfully",
-        "CORS middleware configured to allow http://localhost:5173",
-        "backend/README.md documents how to run",
-        "Typecheck (ruff + mypy) passes",
+        "PERCEPTION_PROMPT in backend/app/routers/perception.py is updated with explicit animal/character decomposition guidance",
+        "Prompt includes concrete examples: cat → head/body/front_legs/hind_legs/tail, person → head/torso/left_arm/right_arm/left_leg/right_leg",
+        "Prompt states: any creature or character with visible limbs MUST be decomposed into sub-parts even if the pose is compact",
+        "Prompt emphasizes: each sub-part must have a pivot at the natural joint (shoulder for front_legs, hip for hind_legs, base for tail)",
+        "Prompt emphasizes: child bboxes should tile the parent bbox as completely as possible — no large uncovered gaps",
+        "Existing guidance for robots/wings/wheels remains intact (backward compatible)",
+        "Typecheck passes",
         "Tests pass"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "This is a prompt-only change to perception.py. Do NOT change any Python logic — only the PERCEPTION_PROMPT string and the PERCEPTION_TOOL schema descriptions if needed. Verify by reading the updated prompt and confirming it covers the listed examples."
     },
     {
-      "id": "US-002",
-      "title": "Image upload endpoint",
-      "description": "As a user, I want to upload an image so the system can process it.",
+      "id": "US-022",
+      "title": "Add sub-part coverage validation with warning log",
+      "description": "As the system, I need a post-perception validation step that warns when the union of child bboxes poorly covers the parent bbox, so bad decompositions are caught early.",
       "acceptanceCriteria": [
-        "POST /api/upload accepts multipart/form-data with field 'file'",
-        "Accepts PNG/JPG/WebP up to 10MB; other formats return 400",
-        "Stores image to backend/storage/images/{uuid}.{ext}",
-        "Returns {\"image_id\": uuid, \"width\": int, \"height\": int}",
-        "pytest cases cover success, oversized, and invalid format",
-        "Tests pass",
-        "Typecheck passes"
+        "New function _validate_sub_part_coverage(elements: list[Element]) -> None in backend/app/routers/perception.py",
+        "For each parent element (elements that have children with matching parent_id), compute the ratio: union-area-of-child-bboxes / parent-bbox-area",
+        "When coverage ratio < 0.70, log a WARNING via Python logging: 'Sub-part coverage for {parent_id} is {ratio:.0%}, below 70% threshold'",
+        "The function is called in the perceive_elements route AFTER parsing elements, BEFORE returning the response",
+        "Validation never raises or blocks — it only logs warnings",
+        "Unit test: given parent bbox [0,0,100,100] and two child bboxes [0,0,50,100] and [50,0,50,100] → coverage = 1.0 (no warning)",
+        "Unit test: given parent bbox [0,0,100,100] and one child bbox [0,0,30,30] → coverage = 0.09 (warning logged)",
+        "Typecheck passes",
+        "Tests pass"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "Use simple axis-aligned bbox union area calculation. No need for pixel-level accuracy — just compute the union of rectangles. The union area can be approximated by painting onto a 1-bit grid or by using the inclusion-exclusion principle for rectangles."
     },
     {
-      "id": "US-003",
-      "title": "VLM element perception endpoint",
-      "description": "As the system, I need to call Claude VLM to identify semantic elements in the uploaded image.",
+      "id": "US-023",
+      "title": "Enhance planner prompt with articulated motion patterns",
+      "description": "As the system, I need the animation planner prompt to understand articulated motion patterns (running, walking, waving, wagging) and generate rotate+pivot timelines for sub-parts instead of whole-body translate bouncing.",
       "acceptanceCriteria": [
-        "POST /api/perception accepts {\"image_id\": \"...\"}",
-        "Uses Anthropic SDK with model claude-opus-4-7 or claude-sonnet-4-6",
-        "Uses tool_use to force structured JSON: [{id, label, bbox: [x,y,w,h], z_order}]",
-        "Caches result to backend/storage/perception/{image_id}.json; repeat calls read cache",
-        "Reads ANTHROPIC_API_KEY from environment",
-        "Tests pass with mocked Anthropic responses",
-        "Typecheck passes"
+        "PLANNER_PROMPT in backend/app/routers/plan_animation.py is updated with articulated motion guidance",
+        "Prompt includes a 'Motion Pattern Reference' section with concrete timeline templates for: running/walking (alternating leg rotation ±15-25° around hip/shoulder pivot, loop=true), waving/swinging (arm rotation ±20-30° around shoulder pivot), tail wagging (small rotation ±10-15° around tail base pivot)",
+        "Prompt states the rule: for sub-parts (elements with parent_id), ALWAYS prefer rotate+pivot over translate — translate on a sub-part detaches it from the parent body",
+        "Prompt states: when the user asks for 'running' or 'walking', animate the legs with alternating rotate phases, do NOT translate the parent up and down",
+        "Prompt states: each rotate step in a looping oscillation should return to the neutral angle (0°) to avoid drift",
+        "Existing planner guidance for whole-object motion (jump, slide) remains intact",
+        "Typecheck passes",
+        "Tests pass"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "This is a prompt-only change to plan_animation.py. Only modify the PLANNER_PROMPT string. Do NOT change any Python logic, schemas, or tool definitions. The timeline template examples should be written in plain English within the prompt, not as JSON — the LLM will translate them to DSL."
     },
     {
-      "id": "US-004",
-      "title": "SAM2 segmentation endpoint",
-      "description": "As the system, I need to segment each identified element into a transparent PNG layer using Replicate SAM2.",
+      "id": "US-024",
+      "title": "Add yoyo oscillation support to animation DSL and frontend",
+      "description": "As a developer, I need a yoyo flag in the animation DSL so that oscillating motions (leg swing, tail wag) automatically reverse, instead of requiring 3+ explicit rotate steps.",
       "acceptanceCriteria": [
-        "POST /api/segment accepts {\"image_id\": \"...\", \"elements\": [...]}",
-        "Calls Replicate SAM2 (meta/sam-2) for each element bbox to generate mask",
-        "Applies mask to cut transparent PNG; saves to backend/storage/layers/{image_id}/{element_id}.png",
-        "Returns layer URL per element",
-        "Reads REPLICATE_API_TOKEN from environment",
-        "Tests pass with mocked Replicate client",
-        "Typecheck passes"
+        "backend/app/schemas/animation.py: ElementAnimation model gains yoyo: bool = False",
+        "backend/app/routers/plan_animation.py: PLANNER_TOOL schema for report_animation_plan includes yoyo boolean field in the element-level properties",
+        "PLANNER_PROMPT updated to mention yoyo: 'For oscillating motions (leg swing, pendulum, tail wag), set yoyo=true and loop=true — the timeline will automatically reverse. This means you only need one rotate step (e.g. rotate +20°) and it will swing back and forth.'",
+        "frontend/src/lib/animator.ts: AnimationDSL ElementAnimation interface gains yoyo?: boolean",
+        "frontend/src/lib/animator.ts: buildTimeline uses yoyo when creating GSAP sub-timeline: gsap.timeline({ repeat: loop ? -1 : 0, yoyo: yoyo ?? false })",
+        "Existing tests still pass (yoyo defaults to false, no behavior change for existing DSL)",
+        "New backend test: AnimationPlan with yoyo=true validates without error",
+        "New frontend test: buildTimeline with yoyo=true creates a GSAP timeline with yoyo property set",
+        "Typecheck passes",
+        "Tests pass"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "This touches 4 files: animation.py (schema), plan_animation.py (tool schema + prompt), animator.ts (GSAP mapping), and their respective tests. Keep changes minimal — yoyo is a simple boolean flag that maps directly to GSAP's native yoyo property."
     },
     {
-      "id": "US-005",
-      "title": "Background inpainting endpoint",
-      "description": "As the system, I need to inpaint the holes left after extracting elements so the background layer is complete.",
+      "id": "US-025",
+      "title": "End-to-end articulated cat test with mocked VLM responses",
+      "description": "As a developer, I need an integration test that verifies the full perception → segment → plan-animation chain produces articulated leg motion for a cat with prompt '让小猫原地奔跑'.",
       "acceptanceCriteria": [
-        "POST /api/inpaint accepts {\"image_id\": \"...\", \"masks\": [...]}",
-        "Uses Replicate inpainting model to fill the combined mask region",
-        "Saves result to backend/storage/layers/{image_id}/background.png",
-        "Returns background URL",
-        "Tests pass with mocked Replicate client",
+        "New file: backend/tests/e2e/test_articulated_cat.py",
+        "Test uses a fixture perception response with parent element 'black_cat' (bbox covering the cat region) and at least 3 children: black_cat.body, black_cat.front_legs, black_cat.hind_legs — each with parent_id='black_cat' and appropriate pivot values",
+        "Test uses a fixture plan-animation response where black_cat.front_legs and black_cat.hind_legs have timeline steps of type 'rotate' (not translate) with non-null pivot values",
+        "Test asserts: the plan DSL for leg sub-parts uses rotate primitives",
+        "Test asserts: the plan DSL for leg sub-parts has loop=true (continuous running motion)",
+        "Test asserts: the parent element 'black_cat' either has no translate dy or only a small subtle one (not a large bounce)",
+        "Fixture files stored in backend/tests/e2e/fixtures/ as articulated_perception.json and articulated_plan.json",
+        "Tests pass",
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-006",
-      "title": "Animation DSL planner endpoint",
-      "description": "As a user, I want my natural-language description to be converted into a per-element animation plan.",
-      "acceptanceCriteria": [
-        "POST /api/plan-animation accepts {\"image_id\": \"...\", \"elements\": [...], \"prompt\": \"...\"}",
-        "Calls Claude with element list; returns GSAP-compatible DSL [{element_id, timeline, easing, loop, duration_ms}]",
-        "DSL schema defined in backend/app/schemas/animation.py using Pydantic",
-        "Supports 5 primitives: translate, rotate, scale, opacity, path-follow",
-        "Validates that every element_id exists in the input elements list",
-        "Tests pass",
-        "Typecheck passes"
-      ],
-      "priority": 6,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-007",
-      "title": "Scaffold Vite + Vue3 frontend",
-      "description": "As a developer, I need a Vite + Vue3 frontend skeleton with routing and basic layout.",
-      "acceptanceCriteria": [
-        "frontend/ uses Vite + Vue3 + TypeScript + Tailwind",
-        "Vue Router configured with / (home) and /editor/:imageId",
-        "API client wrapper with base URL http://localhost:8000",
-        "npm run dev starts on port 5173",
-        "Typecheck (vue-tsc) passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 7,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-008",
-      "title": "Image upload page",
-      "description": "As a user, I want a drag-and-drop upload page so I can start processing my image.",
-      "acceptanceCriteria": [
-        "Home page has drag-and-drop upload area with size/format hint",
-        "On upload, calls /api/upload then navigates to /editor/:imageId on success",
-        "Shows upload progress",
-        "Shows error messages for format/size/network failures",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 8,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-009",
-      "title": "Element list panel and pipeline orchestration",
-      "description": "As a user, I want to see what elements the AI identified so I can trust or correct them.",
-      "acceptanceCriteria": [
-        "Editor left panel lists all elements with label + thumbnail",
-        "On page load, sequentially triggers /api/perception -> /api/segment -> /api/inpaint so background.png exists for US-010",
-        "Shows skeleton loading with per-step progress indicator",
-        "Clicking an element highlights its outline on the canvas",
-        "Each of the three API failures handled separately with retry",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 9,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-010",
-      "title": "Layered canvas renderer",
-      "description": "As a user, I want the image redrawn as stacked layers so each element can be animated independently.",
-      "acceptanceCriteria": [
-        "Editor center shows a canvas matching original image dimensions",
-        "Background layer and each element layer stacked by z_order",
-        "Visually matches original image (no boundary artifacts)",
-        "Component encapsulated in frontend/src/components/LayeredCanvas.vue",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 10,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-011a",
-      "title": "DSL-to-GSAP animator library",
-      "description": "As a developer, I need a tested animator library that turns DSL into GSAP timelines, so the UI story can focus on wiring.",
-      "acceptanceCriteria": [
-        "GSAP installed as a dependency",
-        "frontend/src/lib/animator.ts exports buildTimeline(dsl, layerRefs) returning a gsap.core.Timeline",
-        "Implements 5 primitives: translate, rotate, scale, opacity, path-follow",
-        "Each primitive supports easing and loop fields",
-        "Vitest unit tests for each primitive assert duration, target values, and repeat on the generated timeline",
-        "Throws identifiable errors for unknown primitives or missing element_ids",
-        "Tests pass",
-        "Typecheck passes"
-      ],
-      "priority": 11,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-011b",
-      "title": "Animation prompt UI and playback controls",
-      "description": "As a user, I want to type what I want the elements to do and see them animate.",
-      "acceptanceCriteria": [
-        "Right panel has a textarea and 'Make it Lively' button",
-        "Clicking button calls /api/plan-animation and applies the DSL via US-011a's buildTimeline on LayeredCanvas",
-        "Play, pause, and reset buttons work with correct disabled state per playback state",
-        "API failure shows an error and does not corrupt existing canvas state",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 12,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-012",
-      "title": "GIF export",
-      "description": "As a user, I want to export the animation as a GIF so I can share it.",
-      "acceptanceCriteria": [
-        "'Export GIF' button in the editor",
-        "Uses gif.js or gifenc to record canvas frames (>=2s, 15fps)",
-        "Automatically downloads make-it-lively.gif",
-        "Shows progress during recording",
-        "Typecheck passes",
-        "Verify in browser using dev-browser skill"
-      ],
-      "priority": 13,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-013",
-      "title": "Backend pipeline integration test",
-      "description": "As a developer, I want a pytest that runs the full backend pipeline with mocked external calls, plus a manual e2e checklist for live runs.",
-      "acceptanceCriteria": [
-        "tests/e2e/smoke.md documents manual verification steps with a fixed reference image and prompt (used with real API keys)",
-        "Backend has fixtures or snapshots for perception/segment/plan-animation on the reference image",
-        "A pytest case runs upload -> perception -> segment -> inpaint -> plan-animation with mocked or VCR-recorded external calls",
-        "Tests pass",
-        "Typecheck passes"
-      ],
-      "priority": 14,
-      "passes": true,
-      "notes": ""
+      "passes": false,
+      "notes": "This test uses MOCKED VLM responses (fixtures) — it does NOT call the real Claude API. The purpose is to verify the data contract: given a well-decomposed perception result, the planner should produce articulated rotate animations. The segment step should be mocked with solid masks (same pattern as existing test_pipeline.py). Focus the assertions on the SHAPE of the DSL, not exact numeric values."
     }
   ]
 }
