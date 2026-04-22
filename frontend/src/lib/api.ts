@@ -76,6 +76,8 @@ export interface PerceptionResponse {
 export interface Layer {
   element_id: string
   url: string
+  contour?: Array<[number, number]> | null
+  centroid?: [number, number] | null
 }
 
 export interface SegmentResponse {
@@ -107,7 +109,10 @@ export const segmentElements = (
 
 export const inpaintBackground = (
   imageId: string,
-  masks: Array<{ bbox: [number, number, number, number] }>,
+  masks: Array<{
+    bbox: [number, number, number, number]
+    contour?: Array<[number, number]> | null
+  }>,
 ): Promise<InpaintResponse> =>
   api.postJson<InpaintResponse>('/api/inpaint', {
     image_id: imageId,

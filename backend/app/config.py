@@ -59,3 +59,41 @@ def use_replicate_fallback() -> bool:
         return True
     token = os.environ.get("REPLICATE_API_TOKEN", "").strip()
     return not token
+
+
+# --- Precise segmentation toggles -----------------------------------------
+
+
+def feather_radius() -> int:
+    """Gaussian blur radius (px) for alpha-edge feathering (default 2).
+
+    A small radius (1–3) smooths the hard mask boundary without bleeding
+    into the interior.  Set ``FEATHER_RADIUS=0`` to disable.
+    """
+    value = os.environ.get("FEATHER_RADIUS", "2").strip()
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 2
+
+
+def grabcut_iterations() -> int:
+    """Iteration count for OpenCV GrabCut in the local fallback (default 5)."""
+    value = os.environ.get("GRABCUT_ITERATIONS", "5").strip()
+    try:
+        return max(1, int(value))
+    except ValueError:
+        return 5
+
+
+def contour_epsilon() -> float:
+    """Simplification factor for ``cv2.approxPolyDP`` (default 2.0).
+
+    Applied as ``epsilon * arc_length / 1000`` so the value scales with
+    contour size rather than being an absolute pixel distance.
+    """
+    value = os.environ.get("CONTOUR_EPSILON", "2.0").strip()
+    try:
+        return max(0.1, float(value))
+    except ValueError:
+        return 2.0

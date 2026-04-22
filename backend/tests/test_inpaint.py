@@ -61,6 +61,20 @@ def _sample_masks() -> list[dict[str, Any]]:
     ]
 
 
+def _sample_masks_with_contours() -> list[dict[str, Any]]:
+    """Masks that carry contour polygons from the segmentation step."""
+    return [
+        {
+            "bbox": [4.0, 8.0, 16.0, 16.0],
+            "contour": [[4, 8], [20, 8], [20, 24], [4, 24]],
+        },
+        {
+            "bbox": [20.0, 20.0, 8.0, 8.0],
+            "contour": [[20, 20], [28, 20], [28, 28], [20, 28]],
+        },
+    ]
+
+
 def test_inpaint_success_writes_background_and_returns_url(
     isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -197,6 +211,51 @@ def test_inpaint_uses_pillow_fallback_when_replicate_disabled(
     assert response.status_code == 200
     assert stub.calls == []  # Replicate never called.
 
+    bg_path = storage.LAYERS_DIR / image_id / "background.png"
+    assert bg_path.exists()
+    bg_img = Image.open(bg_path)
+    assert bg_img.mode == "RGB"
+    assert bg_img.size == (40, 30)
+
+
+def test_inpaint_accepts_masks_with_contours(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Masks carrying contour polygons should be accepted and produce a valid
+    background (contour-based mask is used for inpainting)."""
+    image_id = "inp-contour"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png")
+
+    stub = _StubReplicateClient(output=_filled_png_bytes())
+    monkeypatch.setattr(inpaint, "get_replicate_client", lambda: stub)
+
+    response = client.post(
+        "/api/inpaint",
+        json={"image_id": image_id, "masks": _sample_masks_with_contours()},
+    )
+
+    assert response.status_code == 200
+    assert (storage.LAYERS_DIR / image_id / "background.png").exists()
+
+
+def test_inpaint_fallback_accepts_masks_with_contours(
+    isolated_storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contour-based masks also work in the local blur-fill fallback path."""
+    image_id = "inp-contour-fb"
+    _write_png(storage.IMAGES_DIR / f"{image_id}.png", width=40, height=30)
+
+    monkeypatch.setenv("USE_REPLICATE_FALLBACK", "true")
+    stub = _StubReplicateClient(output=_filled_png_bytes())
+    monkeypatch.setattr(inpaint, "get_replicate_client", lambda: stub)
+
+    response = client.post(
+        "/api/inpaint",
+        json={"image_id": image_id, "masks": _sample_masks_with_contours()[:1]},
+    )
+
+    assert response.status_code == 200
+    assert stub.calls == []
     bg_path = storage.LAYERS_DIR / image_id / "background.png"
     assert bg_path.exists()
     bg_img = Image.open(bg_path)

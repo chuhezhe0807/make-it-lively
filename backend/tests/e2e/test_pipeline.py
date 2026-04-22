@@ -152,10 +152,16 @@ def test_full_pipeline_with_mocked_externals(
     assert [e["id"] for e in elements] == ["cat", "ball"]
     assert (storage.PERCEPTION_DIR / f"{image_id}.json").exists()
 
-    # 3. Segment (Replicate stubbed with a full-opacity mask per element).
-    segment_stub = _StubReplicate(
-        output=_solid_mask_bytes(REFERENCE_WIDTH, REFERENCE_HEIGHT)
-    )
+    # 3. Segment (Replicate stubbed with SAM2 auto-segmentation output).
+    #    SAM2 returns a dict with combined_mask + individual_masks. We provide
+    #    one fully-opaque mask — it will match all element bboxes.
+    sam2_output = {
+        "combined_mask": _solid_mask_bytes(REFERENCE_WIDTH, REFERENCE_HEIGHT),
+        "individual_masks": [
+            _solid_mask_bytes(REFERENCE_WIDTH, REFERENCE_HEIGHT),
+        ],
+    }
+    segment_stub = _StubReplicate(output=sam2_output)
     monkeypatch.setattr(segment, "get_replicate_client", lambda: segment_stub)
 
     segment_response = client.post(
@@ -169,7 +175,8 @@ def test_full_pipeline_with_mocked_externals(
         expected = storage.LAYERS_DIR / image_id / f"{layer['element_id']}.png"
         assert expected.exists()
         assert layer["url"] == f"/storage/layers/{image_id}/{layer['element_id']}.png"
-    assert len(segment_stub.calls) == len(elements)
+    # SAM2 auto-segmentation: 1 call for the whole image (not N per element).
+    assert len(segment_stub.calls) == 1
 
     # 4. Inpaint (Replicate stubbed with a solid grey background).
     inpaint_stub = _StubReplicate(

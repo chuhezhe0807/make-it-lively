@@ -14,6 +14,9 @@ dependencies = [
     # Loads secrets from a local .env file at startup so developers do not
     # have to `export` ANTHROPIC_API_KEY / REPLICATE_API_TOKEN in every shell.
     "python-dotenv>=1.0",
+    # Precise segmentation: contour extraction, GrabCut fallback, mask ops.
+    "opencv-python-headless>=4.9",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +49,10 @@ files = ["app", "tests"]
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "cv2.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

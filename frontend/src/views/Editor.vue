@@ -154,9 +154,18 @@ async function runInpaint(): Promise<boolean> {
   step.status = 'running'
   step.error = null
   try {
+    // Build a contour lookup from the segment response so inpaint can draw
+    // precise masks instead of bounding-box rectangles.
+    const contourByElement: Record<string, Array<[number, number]> | null> = {}
+    for (const layer of layers.value) {
+      contourByElement[layer.element_id] = layer.contour ?? null
+    }
     const response = await inpaintBackground(
       props.imageId,
-      elements.value.map((el) => ({ bbox: el.bbox })),
+      elements.value.map((el) => ({
+        bbox: el.bbox,
+        contour: contourByElement[el.id] ?? null,
+      })),
     )
     backgroundUrl.value = `${API_BASE_URL}${response.background_url}`
     step.status = 'success'

@@ -6,8 +6,10 @@ import io
 import urllib.request
 from typing import Any, Final, cast
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, HTTPException, status
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageFilter
 from pydantic import BaseModel, Field
 from replicate.client import Client as ReplicateClient
 
@@ -30,6 +32,9 @@ router = APIRouter(prefix="/api", tags=["inpaint"])
 
 class Mask(BaseModel):
     bbox: list[float] = Field(..., min_length=4, max_length=4)
+    # Optional precise contour from the segmentation step.  When present,
+    # the inpaint mask is drawn from the contour polygon instead of the bbox.
+    contour: list[list[float]] | None = None
 
 
 class InpaintRequest(BaseModel):
@@ -82,13 +87,42 @@ def _coerce_image_bytes(output: Any) -> bytes:
     )
 
 
-def _build_combined_mask(size: tuple[int, int], masks: list[Mask]) -> bytes:
-    """Render a binary mask PNG (white inside every bbox, black elsewhere)."""
-    mask_img = Image.new("L", size, color=0)
-    draw = ImageDraw.Draw(mask_img)
+def _draw_mask_regions(
+    arr: np.ndarray,
+    masks: list[Mask],
+    canvas_w: int,
+    canvas_h: int,
+) -> None:
+    """Fill *arr* in-place using contour polygons when available, else bboxes."""
     for m in masks:
-        x, y, w, h = m.bbox
-        draw.rectangle((x, y, x + w, y + h), fill=255)
+        if m.contour and len(m.contour) >= 3:
+            pts = np.array(m.contour, dtype=np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(arr, [pts], color=255)
+        else:
+            x, y, w, h = m.bbox
+            x1 = max(0, int(round(x)))
+            y1 = max(0, int(round(y)))
+            x2 = min(canvas_w, int(round(x + w)))
+            y2 = min(canvas_h, int(round(y + h)))
+            cv2.rectangle(arr, (x1, y1), (x2, y2), color=255, thickness=-1)
+
+
+def _build_combined_mask(size: tuple[int, int], masks: list[Mask]) -> bytes:
+    """Render a binary mask PNG using contour polygons (preferred) or bboxes.
+
+    A small morphological dilation is applied to ensure the mask fully covers
+    any residual fringe pixels around the element boundary.
+    """
+    # size is (width, height) in Pillow convention; numpy wants (rows, cols).
+    arr = np.zeros((size[1], size[0]), dtype=np.uint8)
+    _draw_mask_regions(arr, masks, canvas_w=size[0], canvas_h=size[1])
+
+    # Dilate by ~4 px to cover sub-pixel fringe.
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    dilated: np.ndarray = cv2.dilate(arr, kernel, iterations=1)
+    arr = dilated
+
+    mask_img = Image.fromarray(arr, mode="L")
     buf = io.BytesIO()
     mask_img.save(buf, format="PNG")
     return buf.getvalue()
@@ -123,12 +157,10 @@ def _inpaint_with_fallback(
     # Heavy blur fills the "hole" with softened surrounding pixels.
     blurred = base.filter(ImageFilter.GaussianBlur(radius=32))
 
-    # Binary mask from the union of element bboxes.
-    mask_img = Image.new("L", size, color=0)
-    draw = ImageDraw.Draw(mask_img)
-    for m in masks:
-        x, y, w, h = m.bbox
-        draw.rectangle((x, y, x + w, y + h), fill=255)
+    # Binary mask using contour polygons when available, else bboxes.
+    arr = np.zeros((size[1], size[0]), dtype=np.uint8)
+    _draw_mask_regions(arr, masks, canvas_w=size[0], canvas_h=size[1])
+    mask_img = Image.fromarray(arr, mode="L")
 
     # Feather the mask edges so the blurred patch blends into the rest of
     # the background — a hard edge looks obviously fake.
