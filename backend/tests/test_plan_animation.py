@@ -246,3 +246,47 @@ def test_plan_animation_requires_elements() -> None:
         json={"image_id": "img-xyz", "elements": [], "prompt": "hi"},
     )
     assert response.status_code == 422
+
+
+def test_plan_animation_accepts_yoyo_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ElementAnimation with yoyo=true validates and round-trips correctly."""
+    payload = {
+        "plan": [
+            {
+                "element_id": "cat",
+                "timeline": [
+                    {"type": "rotate", "angle": 20.0, "pivot": [50.0, 30.0]},
+                ],
+                "easing": "sine.inOut",
+                "loop": True,
+                "yoyo": True,
+                "duration_ms": 600,
+            }
+        ]
+    }
+    stub_client = _StubClient(_StubMessage([_StubToolUseBlock(payload)]))
+    monkeypatch.setattr(plan_animation, "get_anthropic_client", lambda: stub_client)
+
+    response = _post(_sample_elements(), prompt="swing the cat")
+
+    assert response.status_code == 200
+    plan = response.json()["plan"]
+    assert plan[0]["yoyo"] is True
+    assert plan[0]["loop"] is True
+
+
+def test_plan_animation_yoyo_defaults_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When yoyo is omitted, it defaults to false (backward compatible)."""
+    stub_client = _StubClient(_StubMessage([_StubToolUseBlock(_sample_plan_payload())]))
+    monkeypatch.setattr(plan_animation, "get_anthropic_client", lambda: stub_client)
+
+    response = _post(_sample_elements())
+
+    assert response.status_code == 200
+    # Existing payloads without yoyo should still work; yoyo defaults false.
+    for item in response.json()["plan"]:
+        assert item["yoyo"] is False

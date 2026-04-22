@@ -28,6 +28,9 @@ export interface ElementAnimation {
   timeline: AnimationPrimitive[]
   easing: string
   loop: boolean
+  // When true the timeline plays forward then backward (ping-pong).
+  // Ideal for oscillating motions — combine with loop=true.
+  yoyo?: boolean
   duration_ms: number
 }
 
@@ -201,6 +204,7 @@ export function buildTimeline(
 
     const sub = gsap.timeline({
       repeat: elementAnimation.loop ? -1 : 0,
+      yoyo: elementAnimation.yoyo ?? false,
     })
 
     const fallbackDurationSeconds = elementAnimation.duration_ms / 1000

@@ -43,6 +43,31 @@ PLANNER_PROMPT: Final[str] = (
     "`pivot` to the element's pivot unless you have a strong reason to "
     "pick a different anchor. For translate / opacity / path-follow, omit "
     "`pivot`.\n\n"
+    # --- Articulated Motion Patterns ---
+    # Critical for making animations look alive instead of rigid.
+    "ARTICULATED MOTION RULES:\n"
+    "1. For sub-parts (elements with parent_id), ALWAYS prefer rotate + "
+    "pivot over translate. Translating a sub-part detaches it from the "
+    "parent body — it will float away instead of swinging naturally.\n"
+    "2. When the user asks for 'running', 'walking', 'galloping', or any "
+    "locomotion: animate the LEGS with alternating rotate phases around "
+    "their pivot (hip/shoulder joint). Do NOT translate the parent "
+    "up-and-down to fake bouncing.\n"
+    "3. Each oscillating rotate should return to 0° at the end to avoid "
+    "drift when looping.\n\n"
+    "MOTION PATTERN REFERENCE:\n"
+    "- Running / walking legs: set loop=true, yoyo=true. Each leg gets "
+    "one rotate step (e.g. front_legs rotate +20°, hind_legs rotate -20°). "
+    "yoyo=true makes them swing back automatically. Use the leg's pivot "
+    "(shoulder or hip joint).\n"
+    "- Waving / swinging arm: set loop=true, yoyo=true. One rotate step "
+    "(e.g. +25°) around the shoulder pivot.\n"
+    "- Tail wagging: set loop=true, yoyo=true. One rotate step (e.g. "
+    "+12°) around the tail base pivot. Short duration (300-500ms).\n"
+    "- Wing flapping: set loop=true, yoyo=true. One rotate step (e.g. "
+    "-30° for downstroke) around the wing root pivot.\n"
+    "- Head nodding: set loop=true, yoyo=true. One rotate step (e.g. "
+    "+8°) around the neck base pivot.\n\n"
     "Call the report_animation_plan tool — do not respond with plain text."
 )
 
@@ -98,6 +123,7 @@ PLANNER_TOOL: Final[dict[str, Any]] = {
                         },
                         "easing": {"type": "string"},
                         "loop": {"type": "boolean"},
+                        "yoyo": {"type": "boolean"},
                         "duration_ms": {"type": "integer"},
                     },
                     "required": [

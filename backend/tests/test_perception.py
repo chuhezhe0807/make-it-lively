@@ -197,3 +197,42 @@ def test_perception_rejects_unstructured_response(
 
     assert response.status_code == 502
     assert not (storage.PERCEPTION_DIR / f"{image_id}.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# _validate_sub_part_coverage
+# ---------------------------------------------------------------------------
+
+
+def _make_element(
+    id: str,
+    bbox: list[float],
+    parent_id: str | None = None,
+) -> perception.Element:
+    return perception.Element(
+        id=id, label=id, bbox=bbox, z_order=1, parent_id=parent_id
+    )
+
+
+def test_coverage_full_no_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Two children perfectly tile the parent → no warning."""
+    elements = [
+        _make_element("parent", [0, 0, 100, 100]),
+        _make_element("parent.left", [0, 0, 50, 100], parent_id="parent"),
+        _make_element("parent.right", [50, 0, 50, 100], parent_id="parent"),
+    ]
+    with caplog.at_level("WARNING"):
+        perception._validate_sub_part_coverage(elements)
+    assert "Sub-part coverage" not in caplog.text
+
+
+def test_coverage_low_triggers_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """One tiny child on a large parent → warning."""
+    elements = [
+        _make_element("parent", [0, 0, 100, 100]),
+        _make_element("parent.child", [0, 0, 30, 30], parent_id="parent"),
+    ]
+    with caplog.at_level("WARNING"):
+        perception._validate_sub_part_coverage(elements)
+    assert "Sub-part coverage" in caplog.text
+    assert "parent" in caplog.text

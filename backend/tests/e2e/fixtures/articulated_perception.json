@@ -1,0 +1,50 @@
+{
+  "elements": [
+    {
+      "id": "black_cat",
+      "label": "Black cat",
+      "bbox": [18.0, 230.0, 200.0, 180.0],
+      "z_order": 3
+    },
+    {
+      "id": "black_cat.head",
+      "label": "Cat head",
+      "bbox": [130.0, 230.0, 70.0, 60.0],
+      "z_order": 4,
+      "parent_id": "black_cat",
+      "pivot": [150.0, 280.0]
+    },
+    {
+      "id": "black_cat.body",
+      "label": "Cat body",
+      "bbox": [50.0, 270.0, 130.0, 80.0],
+      "z_order": 3,
+      "parent_id": "black_cat",
+      "pivot": [115.0, 310.0]
+    },
+    {
+      "id": "black_cat.front_legs",
+      "label": "Front legs",
+      "bbox": [120.0, 340.0, 50.0, 70.0],
+      "z_order": 4,
+      "parent_id": "black_cat",
+      "pivot": [145.0, 345.0]
+    },
+    {
+      "id": "black_cat.hind_legs",
+      "label": "Hind legs",
+      "bbox": [50.0, 340.0, 50.0, 70.0],
+      "z_order": 4,
+      "parent_id": "black_cat",
+      "pivot": [75.0, 345.0]
+    },
+    {
+      "id": "black_cat.tail",
+      "label": "Tail",
+      "bbox": [18.0, 240.0, 50.0, 80.0],
+      "z_order": 2,
+      "parent_id": "black_cat",
+      "pivot": [55.0, 300.0]
+    }
+  ]
+}

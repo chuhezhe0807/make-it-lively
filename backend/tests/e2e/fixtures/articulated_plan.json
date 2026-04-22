@@ -1,0 +1,52 @@
+{
+  "plan": [
+    {
+      "element_id": "black_cat.front_legs",
+      "timeline": [
+        {
+          "type": "rotate",
+          "angle": 20.0,
+          "pivot": [145.0, 345.0],
+          "duration_ms": 300,
+          "easing": "sine.inOut"
+        }
+      ],
+      "easing": "sine.inOut",
+      "loop": true,
+      "yoyo": true,
+      "duration_ms": 300
+    },
+    {
+      "element_id": "black_cat.hind_legs",
+      "timeline": [
+        {
+          "type": "rotate",
+          "angle": -20.0,
+          "pivot": [75.0, 345.0],
+          "duration_ms": 300,
+          "easing": "sine.inOut"
+        }
+      ],
+      "easing": "sine.inOut",
+      "loop": true,
+      "yoyo": true,
+      "duration_ms": 300
+    },
+    {
+      "element_id": "black_cat.tail",
+      "timeline": [
+        {
+          "type": "rotate",
+          "angle": 12.0,
+          "pivot": [55.0, 300.0],
+          "duration_ms": 400,
+          "easing": "sine.inOut"
+        }
+      ],
+      "easing": "sine.inOut",
+      "loop": true,
+      "yoyo": true,
+      "duration_ms": 400
+    }
+  ]
+}

@@ -55,6 +55,10 @@ class ElementAnimation(BaseModel):
     timeline: list[AnimationPrimitive]
     easing: str = "power1.inOut"
     loop: bool = False
+    # When True the timeline plays forward then backward (ping-pong).
+    # Ideal for oscillating motions like leg swings, tail wags, and
+    # pendulums — combine with loop=True for continuous oscillation.
+    yoyo: bool = False
     duration_ms: int = Field(default=1000, ge=0)
 
 

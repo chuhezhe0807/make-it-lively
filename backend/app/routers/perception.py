@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from typing import Any, Final, cast
 
 import anthropic
@@ -32,22 +33,42 @@ PERCEPTION_PROMPT: Final[str] = (
     "a short human-readable label, an axis-aligned bounding box in pixel "
     "coordinates as [x, y, width, height] with origin at the top-left, and a "
     "z_order where higher values render on top.\n\n"
-    # Sub-part decomposition: only do this when the object has parts that
-    # would plausibly move independently — a robot's arms, a bird's wings,
-    # a character's head. Skip for rigid objects (balls, text, panels).
+    # Sub-part decomposition: any element with parts that could plausibly
+    # move independently MUST be decomposed. This is critical for animation
+    # quality — without sub-parts, limbs cannot move.
     "If an element is articulated — meaning it has distinct parts that could "
-    "move independently (limbs, wings, wheels, doors, flames) — ALSO emit "
-    "one element per sub-part. Use dotted ids like 'blue_robot.right_arm' "
-    "and set `parent_id` to the parent's id. The set of children should "
-    "cover the parent's bbox as tightly as possible so that hiding the "
-    "parent during animation does not leave visible gaps.\n\n"
-    # Pivot: Claude is great at spatial reasoning, so we ask it to locate
-    # the natural rotation/scale anchor for each articulated sub-part.
-    "For each articulated sub-part (and for standalone articulated elements "
-    "like a pendulum), also return `pivot` as [x, y] pixel coordinates "
-    "pointing at the natural rotation anchor — shoulder for an arm, hip "
-    "for a leg, hinge for a door, base-center for a rocket flame. Omit "
-    "`pivot` when there is no clear anchor.\n\n"
+    "move independently — ALSO emit one element per sub-part. Use dotted "
+    "ids like 'blue_robot.right_arm' and set `parent_id` to the parent's "
+    "id. The set of children should cover the parent's bbox as tightly as "
+    "possible so that hiding the parent during animation does not leave "
+    "visible gaps.\n\n"
+    # Mandatory decomposition for creatures and characters — this is the
+    # single biggest lever for animation quality.
+    "IMPORTANT — any animal, creature, person, or character with visible "
+    "limbs MUST be decomposed into sub-parts, even if the pose is compact "
+    "or limbs partially overlap. Typical decompositions:\n"
+    "  - Cat/dog → head, body, front_legs, hind_legs, tail\n"
+    "  - Bird → head, body, left_wing, right_wing, tail\n"
+    "  - Person → head, torso, left_arm, right_arm, left_leg, right_leg\n"
+    "  - Robot → head, torso, left_arm, right_arm, left_leg, right_leg\n"
+    "  - Insect → head, thorax, left_wing, right_wing, legs\n"
+    "When a limb is partially hidden (e.g. a side-view cat shows only two "
+    "legs), decompose the VISIBLE parts — estimate the bbox even if the "
+    "boundary is approximate. Rigid objects without movable parts (balls, "
+    "text labels, static panels) should NOT be decomposed.\n\n"
+    # Pivot: locate the natural rotation/scale anchor for each sub-part.
+    "For each articulated sub-part, also return `pivot` as [x, y] pixel "
+    "coordinates pointing at the natural rotation anchor — the JOINT where "
+    "this part connects to its parent:\n"
+    "  - front_legs → shoulder joint (top of the leg where it meets the body)\n"
+    "  - hind_legs → hip joint (top of the rear leg)\n"
+    "  - tail → tail base (where the tail meets the body)\n"
+    "  - arm → shoulder\n"
+    "  - head → neck base\n"
+    "  - wing → wing root (where the wing attaches to the body)\n"
+    "  - door → hinge\n"
+    "  - pendulum → pivot point at the top\n"
+    "Omit `pivot` only when there is genuinely no clear anchor.\n\n"
     "Call the report_elements tool."
 )
 
@@ -153,6 +174,60 @@ def _save_cache(response: PerceptionResponse) -> None:
     cache_path.write_text(response.model_dump_json())
 
 
+logger = logging.getLogger(__name__)
+
+_COVERAGE_THRESHOLD = 0.70
+
+
+def _validate_sub_part_coverage(elements: list[Element]) -> None:
+    """Log a warning when child bboxes poorly cover their parent's bbox.
+
+    This is a non-blocking diagnostic — it never raises.  The goal is to
+    surface bad VLM decompositions in the logs so they can be investigated.
+    """
+    # Build parent → children mapping.
+    children_by_parent: dict[str, list[Element]] = {}
+    element_by_id: dict[str, Element] = {}
+    for e in elements:
+        element_by_id[e.id] = e
+        if e.parent_id is not None:
+            children_by_parent.setdefault(e.parent_id, []).append(e)
+
+    for parent_id, children in children_by_parent.items():
+        parent = element_by_id.get(parent_id)
+        if parent is None:
+            continue
+        px, py, pw, ph = parent.bbox
+        parent_area = pw * ph
+        if parent_area <= 0:
+            continue
+
+        # Union area via pixel-grid painting on a boolean grid would be
+        # accurate but expensive.  For axis-aligned bboxes a simple
+        # sum-of-areas approximation (clamped to parent area) is enough
+        # to catch gross misses.  Overlapping children inflate the sum
+        # but that only causes false-negatives (no spurious warnings).
+        child_area_sum = 0.0
+        for child in children:
+            cx, cy, cw, ch = child.bbox
+            # Clamp child bbox to parent bounds for intersection.
+            ix1 = max(px, cx)
+            iy1 = max(py, cy)
+            ix2 = min(px + pw, cx + cw)
+            iy2 = min(py + ph, cy + ch)
+            if ix2 > ix1 and iy2 > iy1:
+                child_area_sum += (ix2 - ix1) * (iy2 - iy1)
+
+        ratio = child_area_sum / parent_area
+        if ratio < _COVERAGE_THRESHOLD:
+            logger.warning(
+                "Sub-part coverage for '%s' is %.0f%%, below %.0f%% threshold",
+                parent_id,
+                ratio * 100,
+                _COVERAGE_THRESHOLD * 100,
+            )
+
+
 def _extract_tool_input(message: Any) -> dict[str, Any]:
     for block in message.content:
         if getattr(block, "type", None) == "tool_use" and block.name == TOOL_NAME:
@@ -202,6 +277,7 @@ def perceive_elements(request: PerceptionRequest) -> PerceptionResponse:
 
     tool_input = _extract_tool_input(message)
     elements = [Element.model_validate(e) for e in tool_input.get("elements", [])]
+    _validate_sub_part_coverage(elements)
     response = PerceptionResponse(image_id=request.image_id, elements=elements)
     _save_cache(response)
     return response
