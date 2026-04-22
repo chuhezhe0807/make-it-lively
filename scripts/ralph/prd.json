@@ -18,7 +18,7 @@
         "Tests pass"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "This is a prompt-only change to perception.py. Do NOT change any Python logic — only the PERCEPTION_PROMPT string and the PERCEPTION_TOOL schema descriptions if needed. Verify by reading the updated prompt and confirming it covers the listed examples."
     },
     {
@@ -37,7 +37,7 @@
         "Tests pass"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Use simple axis-aligned bbox union area calculation. No need for pixel-level accuracy — just compute the union of rectangles. The union area can be approximated by painting onto a 1-bit grid or by using the inclusion-exclusion principle for rectangles."
     },
     {
@@ -55,7 +55,7 @@
         "Tests pass"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "This is a prompt-only change to plan_animation.py. Only modify the PLANNER_PROMPT string. Do NOT change any Python logic, schemas, or tool definitions. The timeline template examples should be written in plain English within the prompt, not as JSON — the LLM will translate them to DSL."
     },
     {
@@ -75,7 +75,7 @@
         "Tests pass"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "This touches 4 files: animation.py (schema), plan_animation.py (tool schema + prompt), animator.ts (GSAP mapping), and their respective tests. Keep changes minimal — yoyo is a simple boolean flag that maps directly to GSAP's native yoyo property."
     },
     {
@@ -94,7 +94,7 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "This test uses MOCKED VLM responses (fixtures) — it does NOT call the real Claude API. The purpose is to verify the data contract: given a well-decomposed perception result, the planner should produce articulated rotate animations. The segment step should be mocked with solid masks (same pattern as existing test_pipeline.py). Focus the assertions on the SHAPE of the DSL, not exact numeric values."
     }
   ]
