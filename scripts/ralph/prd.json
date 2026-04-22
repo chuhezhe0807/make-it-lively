@@ -17,7 +17,7 @@
         "Tests pass"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Pure utility function — add it to the existing contour.py service module next to extract_contour and compute_centroid. Keep the function simple: just iterate contour points for min/max x/y. Add tests in tests/test_contour.py."
     },
     {
@@ -34,7 +34,7 @@
         "Tests pass"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "This story wires the compute_tight_bbox function from US-026 into the segment route. The Layer Pydantic model is in segment.py around line 51. Import compute_tight_bbox from app.services.contour. The frontend Layer interface is in frontend/src/lib/api.ts."
     },
     {
@@ -50,7 +50,7 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "This is a frontend-only change in Editor.vue. The key is to add a few lines in runSegment() after `layers.value = response.layers` that loop through layers and update element bboxes. Since elements is a Vue ref, mutating the bbox property will trigger reactive updates in the SVG overlay template."
     },
     {
@@ -67,7 +67,7 @@
         "Tests pass"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "This is a prompt-only change — modify only the PERCEPTION_PROMPT string in perception.py. Add the bbox guidance BEFORE the sub-part decomposition section. Keep it concise (3-4 sentences). This reduces the initial bbox error so the segment refinement has less work to do."
     },
     {
@@ -85,7 +85,7 @@
         "Tests pass"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Modify _grabcut_segment() in segment.py. The two-pass logic wraps the existing single-pass code: run it once, check mask foreground area, if sufficient extract contour → compute tight bbox → run GrabCut again with the tighter rect. The second pass reuses the same scaled working image. Add the config function to config.py following the existing pattern."
     }
   ]
