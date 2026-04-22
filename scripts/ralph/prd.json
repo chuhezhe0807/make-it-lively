@@ -1,101 +1,92 @@
 {
   "project": "Make It Lively",
-  "branchName": "ralph/articulated-animation",
-  "description": "Improve perception and animation planning so that animals/characters are decomposed into articulated sub-parts (head, body, limbs, tail) and the planner generates rotate+pivot joint motion instead of whole-body translate bouncing.",
+  "branchName": "ralph/bbox-refinement",
+  "description": "VLM perception returns imprecise bounding boxes. Use segmentation mask contours to compute tight refined bboxes, return them in the segment API, and have the frontend replace VLM bboxes with refined ones so all downstream steps (SVG overlay, inpaint, planner) use accurate spatial data.",
   "userStories": [
     {
-      "id": "US-021",
-      "title": "Enhance VLM perception prompt for animal/character sub-part decomposition",
-      "description": "As the system, I need the perception prompt to aggressively decompose animals, characters, and creatures into sub-parts (head, body, limbs, tail) so that each limb can be animated independently.",
+      "id": "US-026",
+      "title": "Compute tight bbox from contour polygon",
+      "description": "As the system, I need to compute a tight axis-aligned bounding box from the mask contour so downstream consumers can use accurate spatial data instead of the VLM's rough estimate.",
       "acceptanceCriteria": [
-        "PERCEPTION_PROMPT in backend/app/routers/perception.py is updated with explicit animal/character decomposition guidance",
-        "Prompt includes concrete examples: cat → head/body/front_legs/hind_legs/tail, person → head/torso/left_arm/right_arm/left_leg/right_leg",
-        "Prompt states: any creature or character with visible limbs MUST be decomposed into sub-parts even if the pose is compact",
-        "Prompt emphasizes: each sub-part must have a pivot at the natural joint (shoulder for front_legs, hip for hind_legs, base for tail)",
-        "Prompt emphasizes: child bboxes should tile the parent bbox as completely as possible — no large uncovered gaps",
-        "Existing guidance for robots/wings/wheels remains intact (backward compatible)",
+        "New function compute_tight_bbox(contour: list[list[float]]) -> list[float] | None in backend/app/services/contour.py",
+        "Returns [x, y, width, height] computed from min/max of contour vertex coordinates",
+        "Returns None when contour is empty or has fewer than 3 points",
+        "Unit test: square contour [[10,10],[30,10],[30,30],[10,30]] produces bbox [10, 10, 20, 20]",
+        "Unit test: empty contour returns None",
         "Typecheck passes",
         "Tests pass"
       ],
       "priority": 1,
-      "passes": true,
-      "notes": "This is a prompt-only change to perception.py. Do NOT change any Python logic — only the PERCEPTION_PROMPT string and the PERCEPTION_TOOL schema descriptions if needed. Verify by reading the updated prompt and confirming it covers the listed examples."
+      "passes": false,
+      "notes": "Pure utility function — add it to the existing contour.py service module next to extract_contour and compute_centroid. Keep the function simple: just iterate contour points for min/max x/y. Add tests in tests/test_contour.py."
     },
     {
-      "id": "US-022",
-      "title": "Add sub-part coverage validation with warning log",
-      "description": "As the system, I need a post-perception validation step that warns when the union of child bboxes poorly covers the parent bbox, so bad decompositions are caught early.",
+      "id": "US-027",
+      "title": "Return refined_bbox in segment API response",
+      "description": "As the system, I need the segment API response to include a refined bounding box per layer so the frontend can replace the VLM's rough estimate with a precise one.",
       "acceptanceCriteria": [
-        "New function _validate_sub_part_coverage(elements: list[Element]) -> None in backend/app/routers/perception.py",
-        "For each parent element (elements that have children with matching parent_id), compute the ratio: union-area-of-child-bboxes / parent-bbox-area",
-        "When coverage ratio < 0.70, log a WARNING via Python logging: 'Sub-part coverage for {parent_id} is {ratio:.0%}, below 70% threshold'",
-        "The function is called in the perceive_elements route AFTER parsing elements, BEFORE returning the response",
-        "Validation never raises or blocks — it only logs warnings",
-        "Unit test: given parent bbox [0,0,100,100] and two child bboxes [0,0,50,100] and [50,0,50,100] → coverage = 1.0 (no warning)",
-        "Unit test: given parent bbox [0,0,100,100] and one child bbox [0,0,30,30] → coverage = 0.09 (warning logged)",
+        "Layer model in backend/app/routers/segment.py gains field: refined_bbox: list[float] | None = None",
+        "In the segment route's main loop, after extracting contour, call compute_tight_bbox(contour_pts) and assign to layer.refined_bbox",
+        "When contour is empty (no foreground mask), refined_bbox stays None",
+        "Frontend api.ts Layer interface gains: refined_bbox?: [number, number, number, number] | null",
+        "Existing segment tests updated to assert refined_bbox is present in the response when a mask exists",
         "Typecheck passes",
         "Tests pass"
       ],
       "priority": 2,
-      "passes": true,
-      "notes": "Use simple axis-aligned bbox union area calculation. No need for pixel-level accuracy — just compute the union of rectangles. The union area can be approximated by painting onto a 1-bit grid or by using the inclusion-exclusion principle for rectangles."
+      "passes": false,
+      "notes": "This story wires the compute_tight_bbox function from US-026 into the segment route. The Layer Pydantic model is in segment.py around line 51. Import compute_tight_bbox from app.services.contour. The frontend Layer interface is in frontend/src/lib/api.ts."
     },
     {
-      "id": "US-023",
-      "title": "Enhance planner prompt with articulated motion patterns",
-      "description": "As the system, I need the animation planner prompt to understand articulated motion patterns (running, walking, waving, wagging) and generate rotate+pivot timelines for sub-parts instead of whole-body translate bouncing.",
+      "id": "US-028",
+      "title": "Frontend replaces VLM bboxes with refined bboxes after segmentation",
+      "description": "As the frontend, I need to update element bboxes with refined values from the segment response so that SVG overlays, inpaint masks, and animation planning all use accurate coordinates.",
       "acceptanceCriteria": [
-        "PLANNER_PROMPT in backend/app/routers/plan_animation.py is updated with articulated motion guidance",
-        "Prompt includes a 'Motion Pattern Reference' section with concrete timeline templates for: running/walking (alternating leg rotation ±15-25° around hip/shoulder pivot, loop=true), waving/swinging (arm rotation ±20-30° around shoulder pivot), tail wagging (small rotation ±10-15° around tail base pivot)",
-        "Prompt states the rule: for sub-parts (elements with parent_id), ALWAYS prefer rotate+pivot over translate — translate on a sub-part detaches it from the parent body",
-        "Prompt states: when the user asks for 'running' or 'walking', animate the legs with alternating rotate phases, do NOT translate the parent up and down",
-        "Prompt states: each rotate step in a looping oscillation should return to the neutral angle (0°) to avoid drift",
-        "Existing planner guidance for whole-object motion (jump, slide) remains intact",
-        "Typecheck passes",
-        "Tests pass"
+        "In Editor.vue runSegment(), after receiving the segment response, iterate layers and update elements.value: for each layer with non-null refined_bbox, find the matching element by id and overwrite its bbox",
+        "SVG rect overlays automatically display the updated bboxes (they bind to el.bbox reactively)",
+        "The runInpaint() call that follows uses the updated bboxes (no extra changes needed — it reads from elements.value)",
+        "The planAnimation() call uses updated bboxes (no extra changes needed — it reads from elements.value)",
+        "Elements without a matching layer or with null refined_bbox keep their original VLM bbox",
+        "Typecheck passes"
       ],
       "priority": 3,
-      "passes": true,
-      "notes": "This is a prompt-only change to plan_animation.py. Only modify the PLANNER_PROMPT string. Do NOT change any Python logic, schemas, or tool definitions. The timeline template examples should be written in plain English within the prompt, not as JSON — the LLM will translate them to DSL."
+      "passes": false,
+      "notes": "This is a frontend-only change in Editor.vue. The key is to add a few lines in runSegment() after `layers.value = response.layers` that loop through layers and update element bboxes. Since elements is a Vue ref, mutating the bbox property will trigger reactive updates in the SVG overlay template."
     },
     {
-      "id": "US-024",
-      "title": "Add yoyo oscillation support to animation DSL and frontend",
-      "description": "As a developer, I need a yoyo flag in the animation DSL so that oscillating motions (leg swing, tail wag) automatically reverse, instead of requiring 3+ explicit rotate steps.",
+      "id": "US-029",
+      "title": "Improve VLM perception prompt bbox tightness guidance",
+      "description": "As the system, I need the perception prompt to guide the VLM toward producing tighter bounding boxes that closely wrap the visible pixels of each element.",
       "acceptanceCriteria": [
-        "backend/app/schemas/animation.py: ElementAnimation model gains yoyo: bool = False",
-        "backend/app/routers/plan_animation.py: PLANNER_TOOL schema for report_animation_plan includes yoyo boolean field in the element-level properties",
-        "PLANNER_PROMPT updated to mention yoyo: 'For oscillating motions (leg swing, pendulum, tail wag), set yoyo=true and loop=true — the timeline will automatically reverse. This means you only need one rotate step (e.g. rotate +20°) and it will swing back and forth.'",
-        "frontend/src/lib/animator.ts: AnimationDSL ElementAnimation interface gains yoyo?: boolean",
-        "frontend/src/lib/animator.ts: buildTimeline uses yoyo when creating GSAP sub-timeline: gsap.timeline({ repeat: loop ? -1 : 0, yoyo: yoyo ?? false })",
-        "Existing tests still pass (yoyo defaults to false, no behavior change for existing DSL)",
-        "New backend test: AnimationPlan with yoyo=true validates without error",
-        "New frontend test: buildTimeline with yoyo=true creates a GSAP timeline with yoyo property set",
+        "PERCEPTION_PROMPT in backend/app/routers/perception.py updated with explicit bbox tightness instructions",
+        "Prompt states: the bbox must be the smallest axis-aligned rectangle that contains ALL visible pixels of the element, with no more than a few pixels of padding",
+        "Prompt states: do NOT let the bbox be significantly larger than the element — avoid excess whitespace inside the box",
+        "Prompt states: do NOT let any part of the element fall outside the bbox — the box must fully enclose the element",
+        "Existing perception tests pass unchanged",
         "Typecheck passes",
         "Tests pass"
       ],
       "priority": 4,
-      "passes": true,
-      "notes": "This touches 4 files: animation.py (schema), plan_animation.py (tool schema + prompt), animator.ts (GSAP mapping), and their respective tests. Keep changes minimal — yoyo is a simple boolean flag that maps directly to GSAP's native yoyo property."
+      "passes": false,
+      "notes": "This is a prompt-only change — modify only the PERCEPTION_PROMPT string in perception.py. Add the bbox guidance BEFORE the sub-part decomposition section. Keep it concise (3-4 sentences). This reduces the initial bbox error so the segment refinement has less work to do."
     },
     {
-      "id": "US-025",
-      "title": "End-to-end articulated cat test with mocked VLM responses",
-      "description": "As a developer, I need an integration test that verifies the full perception → segment → plan-animation chain produces articulated leg motion for a cat with prompt '让小猫原地奔跑'.",
+      "id": "US-030",
+      "title": "GrabCut two-pass refinement using tight bbox",
+      "description": "As the system, I need the GrabCut fallback to use a two-pass approach — first with the rough VLM bbox, then with a tight bbox derived from the first pass's contour — for better segmentation accuracy.",
       "acceptanceCriteria": [
-        "New file: backend/tests/e2e/test_articulated_cat.py",
-        "Test uses a fixture perception response with parent element 'black_cat' (bbox covering the cat region) and at least 3 children: black_cat.body, black_cat.front_legs, black_cat.hind_legs — each with parent_id='black_cat' and appropriate pivot values",
-        "Test uses a fixture plan-animation response where black_cat.front_legs and black_cat.hind_legs have timeline steps of type 'rotate' (not translate) with non-null pivot values",
-        "Test asserts: the plan DSL for leg sub-parts uses rotate primitives",
-        "Test asserts: the plan DSL for leg sub-parts has loop=true (continuous running motion)",
-        "Test asserts: the parent element 'black_cat' either has no translate dy or only a small subtle one (not a large bounce)",
-        "Fixture files stored in backend/tests/e2e/fixtures/ as articulated_perception.json and articulated_plan.json",
-        "Tests pass",
-        "Typecheck passes"
+        "backend/app/config.py gains function grabcut_two_pass() -> bool reading env var GRABCUT_TWO_PASS (default true)",
+        "_grabcut_segment() in segment.py implements two-pass logic: pass 1 with VLM bbox → extract contour → compute tight bbox → pass 2 with tight bbox",
+        "If pass 1 mask has foreground area < 5% of bbox area, skip pass 2 and fall back to rectangular mask (GrabCut failure case)",
+        "Two-pass can be disabled via GRABCUT_TWO_PASS=false for performance-sensitive environments",
+        "Existing fallback tests still pass (the test image is solid color, GrabCut may fail on it — this is fine, the rectangular fallback catches it)",
+        "Total fallback processing time per element ≤ 8s on a medium-resolution image",
+        "Typecheck passes",
+        "Tests pass"
       ],
       "priority": 5,
-      "passes": true,
-      "notes": "This test uses MOCKED VLM responses (fixtures) — it does NOT call the real Claude API. The purpose is to verify the data contract: given a well-decomposed perception result, the planner should produce articulated rotate animations. The segment step should be mocked with solid masks (same pattern as existing test_pipeline.py). Focus the assertions on the SHAPE of the DSL, not exact numeric values."
+      "passes": false,
+      "notes": "Modify _grabcut_segment() in segment.py. The two-pass logic wraps the existing single-pass code: run it once, check mask foreground area, if sufficient extract contour → compute tight bbox → run GrabCut again with the tighter rect. The second pass reuses the same scaled working image. Add the config function to config.py following the existing pattern."
     }
   ]
 }
