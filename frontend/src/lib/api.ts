@@ -78,6 +78,8 @@ export interface Layer {
   url: string
   contour?: Array<[number, number]> | null
   centroid?: [number, number] | null
+  // Tight bbox derived from the mask contour — more accurate than the VLM estimate.
+  refined_bbox?: [number, number, number, number] | null
 }
 
 export interface SegmentResponse {

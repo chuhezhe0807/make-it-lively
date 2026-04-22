@@ -137,6 +137,15 @@ async function runSegment(): Promise<boolean> {
   try {
     const response = await segmentElements(props.imageId, elements.value)
     layers.value = response.layers
+    // Replace VLM bboxes with tighter mask-derived bboxes where available.
+    for (const layer of response.layers) {
+      if (layer.refined_bbox) {
+        const el = elements.value.find((e) => e.id === layer.element_id)
+        if (el) {
+          el.bbox = layer.refined_bbox
+        }
+      }
+    }
     step.status = 'success'
     if (response.layers.length > 0) {
       void preloadDims(`${API_BASE_URL}${response.layers[0].url}`)

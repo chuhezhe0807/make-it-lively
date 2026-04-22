@@ -82,6 +82,20 @@ def compute_centroid(contour: list[list[float]]) -> list[float]:
     return [moments["m10"] / moments["m00"], moments["m01"] / moments["m00"]]
 
 
+def compute_tight_bbox(contour: list[list[float]]) -> list[float] | None:
+    """Axis-aligned bounding box of a contour polygon as ``[x, y, w, h]``.
+
+    Returns ``None`` for degenerate input (fewer than 3 points).
+    """
+    if len(contour) < 3:
+        return None
+    xs = [p[0] for p in contour]
+    ys = [p[1] for p in contour]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    return [min_x, min_y, max_x - min_x, max_y - min_y]
+
+
 def feather_mask(mask: Image.Image, radius: int | None = None) -> Image.Image:
     """Gaussian-blur an L-mode mask to soften hard edges.
 

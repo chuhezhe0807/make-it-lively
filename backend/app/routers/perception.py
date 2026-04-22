@@ -33,6 +33,12 @@ PERCEPTION_PROMPT: Final[str] = (
     "a short human-readable label, an axis-aligned bounding box in pixel "
     "coordinates as [x, y, width, height] with origin at the top-left, and a "
     "z_order where higher values render on top.\n\n"
+    # Bbox precision — the VLM tends to return loose bboxes; tighten them.
+    "BBOX PRECISION: each bounding box must be the smallest axis-aligned "
+    "rectangle that fully encloses ALL visible pixels of the element, with "
+    "no more than 2-3 px of padding. Do not let the bbox be significantly "
+    "larger than the element, and do not let any part of the element fall "
+    "outside its bbox.\n\n"
     # Sub-part decomposition: any element with parts that could plausibly
     # move independently MUST be decomposed. This is critical for animation
     # quality — without sub-parts, limbs cannot move.

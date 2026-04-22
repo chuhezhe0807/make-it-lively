@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from PIL import Image, ImageDraw
 
-from app.services.contour import compute_centroid, extract_contour, feather_mask
+from app.services.contour import (
+    compute_centroid,
+    compute_tight_bbox,
+    extract_contour,
+    feather_mask,
+)
 
 # ---------------------------------------------------------------------------
 # extract_contour
@@ -90,3 +95,33 @@ def test_feather_mask_interior_unchanged() -> None:
     feathered = feather_mask(mask, radius=2)
     # Centre of the solid region should still be 255.
     assert feathered.getpixel((25, 25)) == 255
+
+
+# ---------------------------------------------------------------------------
+# compute_tight_bbox
+# ---------------------------------------------------------------------------
+
+
+def test_tight_bbox_square() -> None:
+    contour = [[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0]]
+    bbox = compute_tight_bbox(contour)
+    assert bbox == [10.0, 10.0, 20.0, 20.0]
+
+
+def test_tight_bbox_irregular() -> None:
+    contour = [[5.0, 20.0], [50.0, 10.0], [80.0, 60.0], [30.0, 70.0]]
+    bbox = compute_tight_bbox(contour)
+    assert bbox is not None
+    x, y, w, h = bbox
+    assert x == 5.0
+    assert y == 10.0
+    assert w == 75.0  # 80 - 5
+    assert h == 60.0  # 70 - 10
+
+
+def test_tight_bbox_empty_returns_none() -> None:
+    assert compute_tight_bbox([]) is None
+
+
+def test_tight_bbox_two_points_returns_none() -> None:
+    assert compute_tight_bbox([[0.0, 0.0], [10.0, 10.0]]) is None

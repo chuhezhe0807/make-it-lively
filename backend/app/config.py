@@ -86,6 +86,16 @@ def grabcut_iterations() -> int:
         return 5
 
 
+def grabcut_two_pass() -> bool:
+    """Whether to use two-pass GrabCut refinement (default true).
+
+    First pass uses the VLM bbox; second pass re-runs GrabCut with a
+    tighter bbox derived from the first pass's mask contour.
+    """
+    flag = os.environ.get("GRABCUT_TWO_PASS", "true").strip().lower()
+    return flag not in {"0", "false", "no"}
+
+
 def contour_epsilon() -> float:
     """Simplification factor for ``cv2.approxPolyDP`` (default 2.0).
 

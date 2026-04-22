@@ -138,12 +138,14 @@ def test_segment_response_includes_contour_and_centroid(
 
     assert response.status_code == 200
     layer = response.json()["layers"][0]
-    # A fully-white mask produces a non-empty contour and a valid centroid.
+    # A fully-white mask produces a non-empty contour, centroid, and refined_bbox.
     assert layer["contour"] is not None
     assert isinstance(layer["contour"], list)
     assert len(layer["contour"]) >= 3
     assert layer["centroid"] is not None
     assert len(layer["centroid"]) == 2
+    assert layer["refined_bbox"] is not None
+    assert len(layer["refined_bbox"]) == 4
 
 
 def test_segment_supports_file_like_replicate_output(

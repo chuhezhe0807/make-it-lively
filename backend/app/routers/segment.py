@@ -15,7 +15,12 @@ from pydantic import BaseModel, Field
 from replicate.client import Client as ReplicateClient
 
 from app import config, storage
-from app.services.contour import compute_centroid, extract_contour, feather_mask
+from app.services.contour import (
+    compute_centroid,
+    compute_tight_bbox,
+    extract_contour,
+    feather_mask,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,9 @@ class Layer(BaseModel):
     url: str
     contour: list[list[float]] | None = None
     centroid: list[float] | None = None
+    # Tight bbox derived from the mask contour — more accurate than the
+    # VLM's estimate.  [x, y, width, height] in image pixel coords.
+    refined_bbox: list[float] | None = None
 
 
 class SegmentResponse(BaseModel):
@@ -249,12 +257,40 @@ def _build_rgba_layer(image_bytes: bytes, mask: Image.Image) -> bytes:
 _GRABCUT_MAX_DIM: Final[int] = 1024
 
 
+def _run_grabcut_once(
+    img_bgr: np.ndarray,
+    rect: tuple[int, int, int, int],
+    n_iters: int,
+) -> np.ndarray:
+    """Single-pass GrabCut returning a binary foreground mask (0 / 255)."""
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
+    gc_mask = np.zeros(img_bgr.shape[:2], np.uint8)
+
+    try:
+        cv2.grabCut(
+            img_bgr, gc_mask, rect, bgd_model, fgd_model, n_iters, cv2.GC_INIT_WITH_RECT
+        )
+    except cv2.error:
+        logger.warning("GrabCut failed for rect %s, using rectangular fallback", rect)
+        gc_mask[rect[1] : rect[1] + rect[3], rect[0] : rect[0] + rect[2]] = cv2.GC_FGD
+
+    fg = np.where(
+        (gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0
+    ).astype(np.uint8)
+    return fg
+
+
 def _grabcut_segment(
     image_bytes: bytes,
     bbox: list[float],
     canvas_size: tuple[int, int],
 ) -> tuple[bytes, Image.Image]:
-    """GrabCut-based local segmentation.
+    """GrabCut-based local segmentation with optional two-pass refinement.
+
+    Pass 1: run GrabCut with the VLM bbox.
+    Pass 2 (when enabled): compute a tight bbox from the pass-1 contour
+    and re-run GrabCut with the tighter rect for better accuracy.
 
     Returns ``(layer_png_bytes, raw_mask)`` where *raw_mask* is the
     pre-feathering L-mode mask suitable for contour extraction.
@@ -282,8 +318,9 @@ def _grabcut_segment(
         work_pil = base_pil.resize((new_w, new_h), Image.Resampling.LANCZOS)
 
     img_bgr = cv2.cvtColor(np.array(work_pil), cv2.COLOR_RGB2BGR)
+    n_iters = config.grabcut_iterations()
 
-    # Scale bbox to the working resolution.
+    # Scale bbox to working resolution.
     rect = (
         max(0, int(left * scale)),
         max(0, int(top * scale)),
@@ -291,23 +328,30 @@ def _grabcut_segment(
         max(1, int((bottom - top) * scale)),
     )
 
-    bgd_model = np.zeros((1, 65), np.float64)
-    fgd_model = np.zeros((1, 65), np.float64)
-    gc_mask = np.zeros(img_bgr.shape[:2], np.uint8)
+    # --- Pass 1 ---
+    fg = _run_grabcut_once(img_bgr, rect, n_iters)
 
-    n_iters = config.grabcut_iterations()
-    try:
-        cv2.grabCut(img_bgr, gc_mask, rect, bgd_model, fgd_model, n_iters, cv2.GC_INIT_WITH_RECT)
-    except cv2.error:
-        # GrabCut can fail on very small or degenerate rects — fall back to
-        # a hard rectangular mask.
-        logger.warning("GrabCut failed for bbox %s, using rectangular fallback", bbox)
-        gc_mask[rect[1] : rect[1] + rect[3], rect[0] : rect[0] + rect[2]] = cv2.GC_FGD
-
-    # Definite + probable foreground → 255
-    fg = np.where(
-        (gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0
-    ).astype(np.uint8)
+    # --- Pass 2 (optional): refine with tight bbox from pass-1 contour ---
+    if config.grabcut_two_pass():
+        bbox_area = rect[2] * rect[3]
+        fg_area = int(np.count_nonzero(fg))
+        # Only attempt pass 2 if pass 1 produced a meaningful mask.
+        if bbox_area > 0 and fg_area / bbox_area >= 0.05:
+            mask_pil_pass1 = Image.fromarray(fg, mode="L")
+            contour_pts = extract_contour(mask_pil_pass1)
+            tight = compute_tight_bbox(contour_pts) if contour_pts else None
+            if tight is not None:
+                tx, ty, tw, th = tight
+                # Add a small padding (3px at working resolution) for safety.
+                pad = 3
+                refined_rect = (
+                    max(0, int(tx) - pad),
+                    max(0, int(ty) - pad),
+                    min(img_bgr.shape[1] - max(0, int(tx) - pad), int(tw) + 2 * pad),
+                    min(img_bgr.shape[0] - max(0, int(ty) - pad), int(th) + 2 * pad),
+                )
+                if refined_rect[2] > 0 and refined_rect[3] > 0:
+                    fg = _run_grabcut_once(img_bgr, refined_rect, n_iters)
 
     raw_mask = Image.fromarray(fg, mode="L")
     # Scale mask back to original canvas dimensions.
@@ -362,13 +406,15 @@ def segment_elements(request: SegmentRequest) -> SegmentResponse:
             raw_mask = mask
             layer_bytes = _build_rgba_layer(image_bytes, mask)
 
-        # Extract contour and centroid from the pre-feathering mask.
+        # Extract contour, centroid, and tight bbox from the pre-feathering mask.
         contour: list[list[float]] | None = None
         centroid: list[float] | None = None
+        refined_bbox: list[float] | None = None
         contour_pts = extract_contour(raw_mask)
         if contour_pts:
             contour = contour_pts
             centroid = compute_centroid(contour_pts)
+            refined_bbox = compute_tight_bbox(contour_pts)
 
         layer_path = layers_dir / f"{element.id}.png"
         layer_path.write_bytes(layer_bytes)
@@ -378,6 +424,7 @@ def segment_elements(request: SegmentRequest) -> SegmentResponse:
                 url=f"/storage/layers/{request.image_id}/{element.id}.png",
                 contour=contour,
                 centroid=centroid,
+                refined_bbox=refined_bbox,
             )
         )
 
