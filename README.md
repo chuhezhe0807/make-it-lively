@@ -7,8 +7,20 @@ backend, Claude VLM + (optionally) Replicate SAM2 / SD-inpainting, GSAP
 animations, and GIF export.
 
 ```
-Upload → Perception (VLM) → Segment → Inpaint → Animate → Export GIF
+Upload → Perception (VLM) → Segment → Inpaint → Animate → Export MP4 / GIF
 ```
+
+## Demo
+
+### GIF
+
+![GIF Export Demo](assets/make-it-lively_gif.gif)
+
+### Video (MP4)
+
+<video src="assets/make-it-lively_video.mp4" controls width="600">
+  Your browser does not support the video tag. <a href="assets/make-it-lively_video.mp4">Download MP4</a>
+</video>
 
 ## Repository layout
 
